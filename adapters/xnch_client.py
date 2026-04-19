@@ -1,0 +1,183 @@
+"""HTTP client for all xnch-server interactions."""
+import asyncio
+from typing import Any
+from uuid import UUID
+
+import httpx
+
+from ..config import settings
+from ..models import (
+    SessionContext,
+    ContextManifest,
+    PolicyDryRunResponse,
+    DecisionRecord,
+    VerdictResponse,
+)
+from ..utils.audit import emit_event
+
+
+class XnchClient:
+    def __init__(self) -> None:
+        self._http = httpx.AsyncClient(
+            base_url=settings.xnch_base_url,
+            timeout=10.0,
+        )
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
+    # ------------------------------------------------------------------
+    # Step 2: session/start — receive session context from xnch
+    # ------------------------------------------------------------------
+
+    async def start_session(self, payload: dict[str, Any]) -> SessionContext:
+        resp = await self._http.post("/session/start", json=payload)
+        resp.raise_for_status()
+        ctx = SessionContext.model_validate(resp.json())
+        emit_event(ctx.trace_id, "xnch_client", "SESSION_STARTED", {"session_id": str(ctx.session_id)})
+        return ctx
+
+    # ------------------------------------------------------------------
+    # Step 4: memory/read — context manifest
+    # ------------------------------------------------------------------
+
+    async def read_context(
+        self,
+        session: SessionContext,
+        intent_class: str,
+        target_entity_id: str,
+        target_entity_class: str,
+    ) -> ContextManifest:
+        body = {
+            "session_id": str(session.session_id),
+            "actor_id": session.actor.id,
+            "actor_role": session.actor.role,
+            "query": {
+                "intent_class": intent_class,
+                "target_entity_id": target_entity_id,
+                "target_entity_class": target_entity_class,
+                "lookback_window_days": 30,
+                "max_episodes": 20,
+                "max_patterns": 10,
+            },
+        }
+        resp = await self._http.post("/memory/read", json=body)
+        resp.raise_for_status()
+        manifest = ContextManifest.model_validate(resp.json())
+        emit_event(session.trace_id, "xnch_client", "CONTEXT_MANIFEST_RECEIVED",
+                   {"manifest_id": str(manifest.manifest_id)})
+        return manifest
+
+    # ------------------------------------------------------------------
+    # Step 6: policy/check — dry-run per option (called in parallel)
+    # ------------------------------------------------------------------
+
+    async def check_policy(
+        self,
+        session: SessionContext,
+        option_id: UUID,
+        action_type: str,
+        action_spec: dict[str, Any],
+        payload_hash: str,
+    ) -> PolicyDryRunResponse:
+        body = {
+            "session_id": str(session.session_id),
+            "system_state_version": session.system_state_version,
+            "actor_role": session.actor.role,
+            "option_id": str(option_id),
+            "action": {
+                "type": action_type,
+                "target": action_spec.get("target", ""),
+                "spec": action_spec.get("params", {}),
+                "payload_hash": payload_hash,
+            },
+        }
+        resp = await self._http.post("/policy/check", json=body)
+        resp.raise_for_status()
+        return PolicyDryRunResponse.model_validate(resp.json())
+
+    async def check_policies_parallel(
+        self,
+        session: SessionContext,
+        options: list[Any],
+    ) -> list[PolicyDryRunResponse]:
+        tasks = [
+            self.check_policy(
+                session,
+                opt.option_id,
+                opt.action_type,
+                opt.action_spec.model_dump(),
+                opt.payload_hash,
+            )
+            for opt in options
+        ]
+        return list(await asyncio.gather(*tasks))
+
+    # ------------------------------------------------------------------
+    # Step 10: verdict submission
+    # ------------------------------------------------------------------
+
+    async def submit_verdict(
+        self,
+        session: SessionContext,
+        decision: DecisionRecord,
+        selected_action_spec: dict[str, Any],
+        payload_hash: str,
+    ) -> VerdictResponse:
+        body = {
+            "request_id": str(decision.decision_id),
+            "actor": {
+                "id": session.actor.id,
+                "claimed_role": session.actor.role,
+            },
+            "action": {
+                "type": selected_action_spec.get("type", ""),
+                "target": selected_action_spec.get("target", ""),
+                "payload_hash": payload_hash,
+                "payload": selected_action_spec.get("params", {}),
+            },
+            "context": {
+                "session_id": str(session.session_id),
+                "nexi_reasoning_ref": str(decision.decision_id),
+                "system_state_version": session.system_state_version,
+            },
+        }
+        resp = await self._http.post("/verdict", json=body)
+        resp.raise_for_status()
+        verdict = VerdictResponse.model_validate(resp.json())
+        emit_event(session.trace_id, "xnch_client", "VERDICT_RECEIVED",
+                   {"verdict": verdict.verdict, "audit_ref": str(verdict.audit_ref)})
+        return verdict
+
+    # ------------------------------------------------------------------
+    # Step 14: memory/write — prediction delta update
+    # ------------------------------------------------------------------
+
+    async def write_prediction_update(
+        self,
+        session: SessionContext,
+        episode_id: UUID,
+        prediction_delta: float,
+        early_reextraction_flag: bool,
+    ) -> None:
+        body = {
+            "session_id": str(session.session_id),
+            "actor_id": session.actor.id,
+            "write_type": "EPISODE_PREDICTION_UPDATE",
+            "payload": {
+                "episode_id": str(episode_id),
+                "prediction_delta": prediction_delta,
+                "early_reextraction_flag": early_reextraction_flag,
+            },
+        }
+        resp = await self._http.post("/memory/write", json=body)
+        resp.raise_for_status()
+
+    # ------------------------------------------------------------------
+    # Governance: weight config retrieval
+    # ------------------------------------------------------------------
+
+    async def get_weight_config(self, intent_class: str) -> dict[str, Any]:
+        resp = await self._http.get("/governance/weights", params={"intent_class": intent_class})
+        resp.raise_for_status()
+        return resp.json()

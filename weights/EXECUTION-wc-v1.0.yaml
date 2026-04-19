@@ -1,0 +1,10 @@
+version: "wc-v1.0"
+description: "Default EXECUTION intent class weight profile"
+intent_class: "EXECUTION"
+weights:
+  policy_score: 0.25
+  outcome_score: 0.30
+  risk_score: 0.35
+  context_fit_score: 0.10
+approved_at: "2026-04-18T00:00:00Z"
+approved_by: "system"
