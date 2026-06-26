@@ -21,6 +21,7 @@ from .outcomes import (
     PatternRef,
     PolicyRef,
 )
+from .dag import DAGNode, CompiledDAG
 
 __all__ = [
     "Intent", "IntentClass", "ActionType", "Urgency",
@@ -29,4 +30,5 @@ __all__ = [
     "EvaluatedOption", "Scores", "DecisionRecord", "SelectionRationale", "GenerationPath",
     "VerdictResponse", "ExecutionDispatchPayload", "ExecutionOutcome", "OutcomeStatus",
     "Episode", "ContextManifest", "EpisodeRef", "PatternRef", "PolicyRef",
+    "DAGNode", "CompiledDAG",
 ]

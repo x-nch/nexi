@@ -49,3 +49,5 @@ class Intent(BaseModel):
     urgency: Urgency = Urgency.NORMAL
     ambiguity_score: Annotated[float, Field(ge=0.0, le=1.0)]
     raw_input_hash: str
+    raw_input: str = ""
+    clarifications_needed: list[str] = Field(default_factory=list)

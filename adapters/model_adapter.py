@@ -1,11 +1,6 @@
-"""Model Adapter — Contract 5 fallback chain:
-  1. vllm-primary     (timeout > 30s → next)
-  2. vllm-secondary   (timeout > 45s or unavailable → next)
-  3. llama-cpp-python (any failure → next)
-  4. rule-based       (fallback of last resort)
-"""
 import hashlib
 import json
+import time
 import uuid
 from typing import Any
 
@@ -15,6 +10,8 @@ from ..config import settings
 from ..models import PlanOption, GenerationPath
 from ..models.options import ActionSpec
 from ..models.intent import IntentClass
+from xnch.observability.langfuse_client import trace_llm_call
+from xnch.routing.classifier import classify_request
 
 
 _RULE_BASED_TEMPLATES: dict[str, list[dict]] = {
@@ -88,7 +85,7 @@ def _rule_based_options(intent_class: str, target_entity_id: str) -> list[PlanOp
 
 
 class ModelAdapter:
-    """Routes constrained generation requests through the fallback chain."""
+    """Routes constrained generation through LiteLLM proxy with fallback chain."""
 
     async def generate_options(
         self,
@@ -102,20 +99,25 @@ class ModelAdapter:
             intent_class, target_entity_id, target_entity_class, context_summary, n
         )
 
+        model_route = classify_request(
+            raw_input=prompt_payload.get("intent", {}).get("entity_id", ""),
+            actor_role="AGENT",
+            metadata={"intent_class": intent_class, "complexity_score": 0.5},
+        )
+
         for attempt, (url, timeout) in enumerate([
+            (settings.litellm_proxy_url, settings.litellm_proxy_timeout_s),
             (settings.vllm_primary_url, settings.vllm_primary_timeout_s),
-            (settings.vllm_secondary_url, settings.vllm_secondary_timeout_s),
         ]):
             if not url:
                 continue
             try:
-                options = await self._call_vllm(url, timeout, prompt_payload, intent_class, target_entity_id)
+                options = await self._call_litellm(url, timeout, prompt_payload, intent_class, target_entity_id, model_route.model_name)
                 if options:
                     return options, GenerationPath.MODEL
             except Exception:
                 pass
 
-        # llama-cpp-python stub — same interface, local inference
         try:
             options = await self._call_llama_cpp(prompt_payload, intent_class, target_entity_id)
             if options:
@@ -158,28 +160,40 @@ class ModelAdapter:
             "instruction": "Generate only. Do not evaluate. Do not select.",
         }
 
-    async def _call_vllm(
+    async def _call_litellm(
         self,
         base_url: str,
         timeout: float,
         prompt_payload: dict,
         intent_class: str,
         target_entity_id: str,
+        model_name: str,
     ) -> list[PlanOption]:
+        prompt_text = json.dumps(prompt_payload)
+        t0 = time.time()
         async with httpx.AsyncClient(base_url=base_url, timeout=timeout) as client:
             resp = await client.post(
                 "/chat/completions",
                 json={
-                    "model": settings.model_id,
+                    "model": model_name,
                     "messages": [
                         {"role": "system", "content": "You are an option generator. Return valid JSON only."},
-                        {"role": "user", "content": json.dumps(prompt_payload)},
+                        {"role": "user", "content": prompt_text},
                     ],
                     "response_format": {"type": "json_object"},
                 },
             )
             resp.raise_for_status()
             raw_options = resp.json()["choices"][0]["message"]["content"]
+            latency_ms = int((time.time() - t0) * 1000)
+            tokens_used = resp.json()["usage"]["total_tokens"]
+            await trace_llm_call(
+                prompt=prompt_text,
+                response=raw_options,
+                model=model_name,
+                latency_ms=latency_ms,
+                tokens_used=tokens_used,
+            )
             return self._parse_options(raw_options, target_entity_id)
 
     async def _call_llama_cpp(
@@ -188,20 +202,30 @@ class ModelAdapter:
         intent_class: str,
         target_entity_id: str,
     ) -> list[PlanOption]:
-        # llama-cpp-python exposes an OpenAI-compatible server on localhost:8080 by default
+        prompt_text = json.dumps(prompt_payload)
+        t0 = time.time()
         async with httpx.AsyncClient(base_url="http://localhost:8080", timeout=60.0) as client:
             resp = await client.post(
                 "/v1/chat/completions",
                 json={
                     "messages": [
                         {"role": "system", "content": "You are an option generator. Return valid JSON only."},
-                        {"role": "user", "content": json.dumps(prompt_payload)},
+                        {"role": "user", "content": prompt_text},
                     ],
                     "grammar": None,
                 },
             )
             resp.raise_for_status()
             raw_options = resp.json()["choices"][0]["message"]["content"]
+            latency_ms = int((time.time() - t0) * 1000)
+            tokens_used = resp.json()["usage"]["total_tokens"]
+            await trace_llm_call(
+                prompt=prompt_text,
+                response=raw_options,
+                model="llama-cpp",
+                latency_ms=latency_ms,
+                tokens_used=tokens_used,
+            )
             return self._parse_options(raw_options, target_entity_id)
 
     def _parse_options(self, raw: str | dict, target_entity_id: str) -> list[PlanOption]:

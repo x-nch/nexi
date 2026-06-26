@@ -6,6 +6,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import JSONResponse as JSONResponse
 from pydantic import BaseModel
 
 from .adapters import XnchClient, ModelAdapter
@@ -31,10 +32,10 @@ logger = logging.getLogger(__name__)
 # App lifecycle
 # ---------------------------------------------------------------------------
 
-_xnch: XnchClient
-_model_adapter: ModelAdapter
-_policy_filter: PolicyFilter
-_intent_interpreter: IntentInterpreter
+_xnch: XnchClient | None = None
+_model_adapter: ModelAdapter | None = None
+_policy_filter: PolicyFilter | None = None
+_intent_interpreter: IntentInterpreter | None = None
 
 
 @asynccontextmanager
@@ -94,6 +95,9 @@ async def session_start(
     session = SessionContext.model_validate(body.model_dump())
     emit_event(session.trace_id, "nexi", "SESSION_START_RECEIVED",
                {"session_id": str(session.session_id)})
+
+    if _intent_interpreter is None:
+        return SessionStartResponse(status="ERROR", error="intent interpreter not available")
 
     # Step 3 — Intent interpretation
     try:
@@ -165,9 +169,18 @@ async def session_start(
         raise HTTPException(status_code=500, detail="Selected option not found")
 
     try:
-        validated_action_spec = compile_action_spec(selected_opt)
+        compiled = compile_action_spec(selected_opt)
     except PlanCompilationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+    if not compiled.nodes:
+        return JSONResponse({'error': 'compiled DAG has no nodes'}, status_code=422)
+    node = compiled.nodes[0]
+    validated_action_spec = {
+        "type": node.action_type,
+        "target": node.target,
+        "params": node.params,
+    }
 
     # Step 10 — Final verdict
     try:
@@ -185,7 +198,7 @@ async def session_start(
         return SessionStartResponse(status="ESCALATED", hold_id=hold_id)
 
     # Step 11 — Execution dispatch (async handoff)
-    execution_runner_url = settings.xnch_base_url.replace("8001", "8001")
+    execution_runner_url = settings.execution_runner_url
     try:
         dispatch_payload = await dispatch_execution(
             session, decision, verdict, validated_action_spec, execution_runner_url
