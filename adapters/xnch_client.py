@@ -27,17 +27,6 @@ class XnchClient:
         await self._http.aclose()
 
     # ------------------------------------------------------------------
-    # Step 2: session/start — receive session context from xnch
-    # ------------------------------------------------------------------
-
-    async def start_session(self, payload: dict[str, Any]) -> SessionContext:
-        resp = await self._http.post("/session/start", json=payload)
-        resp.raise_for_status()
-        ctx = SessionContext.model_validate(resp.json())
-        emit_event(ctx.trace_id, "xnch_client", "SESSION_STARTED", {"session_id": str(ctx.session_id)})
-        return ctx
-
-    # ------------------------------------------------------------------
     # Step 4: memory/read — context manifest
     # ------------------------------------------------------------------
 
@@ -123,6 +112,9 @@ class XnchClient:
         decision: DecisionRecord,
         selected_action_spec: dict[str, Any],
         payload_hash: str,
+        intent_class: str = "",
+        entity_class: str = "",
+        outcome_score_predicted: float = 0.5,
     ) -> VerdictResponse:
         body = {
             "request_id": str(decision.decision_id),
@@ -135,11 +127,14 @@ class XnchClient:
                 "target": selected_action_spec.get("target", ""),
                 "payload_hash": payload_hash,
                 "payload": selected_action_spec.get("params", {}),
+                "intent_class": intent_class,
+                "entity_class": entity_class,
             },
             "context": {
                 "session_id": str(session.session_id),
                 "nexi_reasoning_ref": str(decision.decision_id),
                 "system_state_version": session.system_state_version,
+                "outcome_score_predicted": outcome_score_predicted,
             },
         }
         resp = await self._http.post("/verdict", json=body)

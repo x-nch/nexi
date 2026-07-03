@@ -182,16 +182,42 @@ async def session_start(
         "params": node.params,
     }
 
+    # Resolve intent/entity context and predicted score for episode creation
+    intent_class = intent.intent_class.value if intent else ""
+    entity_class = intent.target_entity_class if intent else ""
+    opt_scores = {
+        eo.option_id: eo.composite_score
+        for eo in decision.options_evaluated
+    }
+    outcome_score_predicted = opt_scores.get(decision.selected_option_id, 0.5)
+
     # Step 10 — Final verdict
     try:
         verdict = await _xnch.submit_verdict(
-            session, decision, validated_action_spec, selected_opt.payload_hash
+            session, decision, validated_action_spec, selected_opt.payload_hash,
+            intent_class=intent_class,
+            entity_class=entity_class,
+            outcome_score_predicted=outcome_score_predicted,
         )
     except Exception as exc:
         error_body = str(exc)
         if "STALE_SESSION" in error_body:
-            raise HTTPException(status_code=409, detail="STALE_SESSION: restart required")
-        raise HTTPException(status_code=502, detail=f"Verdict submission failed: {error_body}")
+            # Re-read context to get fresh system_state_version, then retry once
+            try:
+                fresh_manifest = await load_context(_xnch, session, intent)
+                fresh_version = fresh_manifest.system_state_version
+                # Update session with fresh version
+                session.system_state_version = fresh_version
+                verdict = await _xnch.submit_verdict(
+                    session, decision, validated_action_spec, selected_opt.payload_hash,
+                    intent_class=intent_class,
+                    entity_class=entity_class,
+                    outcome_score_predicted=outcome_score_predicted,
+                )
+            except Exception as retry_exc:
+                raise HTTPException(status_code=409, detail=f"STALE_SESSION: retry failed: {retry_exc}")
+        else:
+            raise HTTPException(status_code=502, detail=f"Verdict submission failed: {error_body}")
 
     if verdict.verdict == "BLOCK":
         hold_id = uuid4()
@@ -206,7 +232,10 @@ async def session_start(
     except TokenExpired:
         # Resubmit to xnch for a new token, same decision_id
         verdict = await _xnch.submit_verdict(
-            session, decision, validated_action_spec, selected_opt.payload_hash
+            session, decision, validated_action_spec, selected_opt.payload_hash,
+            intent_class=intent_class,
+            entity_class=entity_class,
+            outcome_score_predicted=outcome_score_predicted,
         )
         dispatch_payload = await dispatch_execution(
             session, decision, verdict, validated_action_spec, execution_runner_url
@@ -280,5 +309,8 @@ async def health() -> dict:
 def _estimate_completion_ms(manifest) -> int:
     if not manifest.episodes:
         return 30_000
-    durations = [ep for ep in manifest.episodes]  # episode refs don't carry duration — use default
-    return 30_000
+    completed = [ep for ep in manifest.episodes if ep.get("duration_ms")]
+    if not completed:
+        return 30_000
+    avg = sum(ep["duration_ms"] for ep in completed) / len(completed)
+    return int(avg)
