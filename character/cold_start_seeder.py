@@ -18,7 +18,22 @@ IDENTITY_FACTS = [
     },
     {
         "type": "identity",
-        "raw_text": "Primary local model: Gemma 4 26B on RTX 3090 at ~135 tok/s",
+        "raw_text": "Primary inference: vLLM Ornith-1.0-35B MoE on node-b port 8082, qwen3_xml tool-call parser",
+        "importance": 2.0,
+    },
+    {
+        "type": "identity",
+        "raw_text": "no-k3s production: Node A 192.168.50.1 (litellm/redis/postgres/langfuse + xnch:8001), Node B 192.168.50.2 (vllm-ornith:8082 + nexi:8000)",
+        "importance": 2.0,
+    },
+    {
+        "type": "identity",
+        "raw_text": "Boot order: start-node-a.sh then start-node-b.sh then e2e-test.sh",
+        "importance": 2.0,
+    },
+    {
+        "type": "identity",
+        "raw_text": "Hard rule: never auto-apply kubectl or Terraform without explicit human confirmation",
         "importance": 2.0,
     },
     {
