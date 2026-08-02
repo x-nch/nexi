@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from nexi.character import prompt_loader
 from nexi.character.prompt_loader import (
     build_system_prompt,
     get_nexi_system_prompt,
@@ -62,7 +63,7 @@ def test_build_system_prompt_includes_style():
 
 
 def test_load_character_yaml_valid():
-    raw = (Path(__file__).parent.parent / "nexi" / "character" / "nexi_character.yaml").read_text()
+    raw = (Path(prompt_loader.__file__).parent / "nexi_character.yaml").read_text()
     parsed = yaml.safe_load(raw)
     assert parsed["identity"]["name"] == "Nexi"
     assert any("sycophantic openers" in item for item in parsed["communication_style"]["never_do"])
