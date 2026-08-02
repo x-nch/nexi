@@ -17,6 +17,10 @@ from xnch.config import settings as xnch_settings
 
 logger = logging.getLogger(__name__)
 
+# Classification short-circuit cache, not durable memory: Redis is the
+# short-term tier by design (sensory/working; PG episodic is the durable
+# tier). A miss re-runs the LLM classifier — at most one call per unique
+# input per 7 days — which also lets intent adapt instead of freezing.
 _INTENT_CACHE_TTL_S = 7 * 86400
 _cache: redis.Redis | None = None
 
