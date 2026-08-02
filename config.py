@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # LiteLLM proxy
     litellm_proxy_url: str = "http://localhost:4000/v1"
     litellm_proxy_timeout_s: float = 60.0
-    intent_classifier_model: str = "gemma4-local"
+    intent_classifier_model: str = "ornith"
 
     # Session
     session_ttl_s: int = 120
@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     execution_runner_url: str = "http://localhost:8002"
 
     # vLLM health check endpoint (used by proactivity engine)
-    vllm_health_url: str = "http://vllm-gemma4:8000/health"
+    vllm_health_url: str = "http://192.168.50.2:8082/health"
 
     # Audit
     audit_events_path: str = "~/.xnch/audit/events.jsonl"

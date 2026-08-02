@@ -98,14 +98,14 @@ class ProactivityEngine:
                 if resp.status_code != 200:
                     events.append(ProactivityEvent(
                         trigger="inference_down",
-                        message="Gemma 4 on i9 is not responding. Routing fallback to claude-judgment is active.",
+                        message="Ornith (vLLM on Node B) is not responding.",
                         priority=5,
                         expires_at=now + timedelta(hours=1),
                     ))
             except Exception:
                 events.append(ProactivityEvent(
                     trigger="inference_down",
-                    message="Gemma 4 on i9 is not responding. Routing fallback to claude-judgment is active.",
+                    message="Ornith (vLLM on Node B) is not responding.",
                     priority=5,
                     expires_at=now + timedelta(hours=1),
                 ))
