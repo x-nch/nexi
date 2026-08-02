@@ -45,9 +45,7 @@ async def seed_identity_memories(episodic_store) -> int:
     if not isinstance(episodic_store, PgEpisodicStore):
         return 0
 
-    from agentmemory import search_memory
-    existing = search_memory("episodes", "identity", n_results=1, filter_metadata={"type": "identity"})
-    if existing:
+    if await episodic_store.has_episode_of_type("identity"):
         return 0
 
     count = 0

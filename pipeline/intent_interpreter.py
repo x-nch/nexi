@@ -1,17 +1,40 @@
 """Step 3 — Intent Normalization (Contract 4). LiteLLM-backed classifier."""
 import hashlib
 import json
+import logging
 import re
 from typing import Any
 from uuid import UUID
 
 import httpx
-from agentmemory import create_memory, search_memory
+import redis
 
 from ..config import settings
 from ..models.intent import Intent, IntentClass, ActionType, Urgency
 from ..utils.audit import emit_event
 from xnch.security.injection_guard import scan_input, InjectionResult
+from xnch.config import settings as xnch_settings
+
+logger = logging.getLogger(__name__)
+
+_INTENT_CACHE_TTL_S = 7 * 86400
+_cache: redis.Redis | None = None
+
+
+def _get_redis() -> redis.Redis | None:
+    global _cache
+    if _cache is None:
+        try:
+            _cache = redis.Redis.from_url(xnch_settings.redis_url, decode_responses=True)
+        except Exception as exc:
+            logger.warning("Intent cache unavailable: %s", exc)
+            _cache = None
+    return _cache
+
+
+def _intent_cache_key(raw_input: str) -> str:
+    digest = hashlib.sha256(raw_input.lower().strip().encode("utf-8")).hexdigest()
+    return f"xnch:intent:{digest}"
 
 
 class PolicyViolation(Exception):
@@ -96,36 +119,37 @@ def _extract_entity(raw_input: str) -> tuple[str, str]:
 
 
 def _recall_intent(raw_input: str) -> Intent | None:
+    client = _get_redis()
+    if client is None:
+        return None
     try:
-        results = search_memory("intent-classifications", raw_input, n_results=3, include_embeddings=False)
-        for item in results:
-            mem = item.get("document", "") if isinstance(item, dict) else str(item)
-            if isinstance(mem, str):
-                try:
-                    data = json.loads(mem)
-                    if data.get("raw_input", "").lower().strip() == raw_input.lower().strip():
-                        return Intent(
-                            session_id=UUID(int=0),
-                            intent_class=IntentClass(data["intent_class"]),
-                            action_type=ActionType(data["action_type"]),
-                            target_entity_id=data.get("entity_id", "unknown"),
-                            target_entity_class=data.get("entity_class", "RESOURCE"),
-                            urgency=Urgency(data.get("urgency", "NORMAL")),
-                            ambiguity_score=0.0,
-                            raw_input_hash="",
-                            raw_input=raw_input,
-                        )
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return None
+        raw = client.get(_intent_cache_key(raw_input))
+        if not raw:
+            return None
+        data = json.loads(raw)
+        return Intent(
+            session_id=UUID(int=0),
+            intent_class=IntentClass(data["intent_class"]),
+            action_type=ActionType(data["action_type"]),
+            target_entity_id=data.get("entity_id", "unknown"),
+            target_entity_class=data.get("entity_class", "RESOURCE"),
+            urgency=Urgency(data.get("urgency", "NORMAL")),
+            ambiguity_score=0.0,
+            raw_input_hash="",
+            raw_input=raw_input,
+        )
+    except Exception as exc:
+        logger.warning("Intent cache lookup failed: %s", exc)
+        return None
 
 
 def _persist_intent(raw_input: str, intent: Intent) -> None:
+    client = _get_redis()
+    if client is None:
+        return
     try:
-        create_memory(
-            "intent-classifications",
+        client.set(
+            _intent_cache_key(raw_input),
             json.dumps({
                 "raw_input": raw_input,
                 "intent_class": intent.intent_class,
@@ -134,13 +158,10 @@ def _persist_intent(raw_input: str, intent: Intent) -> None:
                 "entity_class": intent.target_entity_class,
                 "urgency": intent.urgency,
             }),
-            metadata={
-                "intent_class": intent.intent_class,
-                "action_type": intent.action_type,
-            },
+            ex=_INTENT_CACHE_TTL_S,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Intent cache store failed: %s", exc)
 
 
 class IntentInterpreter:

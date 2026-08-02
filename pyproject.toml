@@ -16,7 +16,6 @@ dependencies = [
     "cryptography>=42",
     "redis>=5.0",
     "apscheduler>=3.10",
-    "agentmemory>=0.4.8",
     "pluggy>=1.6.0",
 ]
 

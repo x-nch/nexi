@@ -7,10 +7,9 @@ from xnch.routing.classifier import classify_request, ModelRoute
 
 
 @pytest.fixture(autouse=True)
-def mock_agentmemory():
-    with patch("xnch.routing.classifier.search_memory", return_value=[]):
-        with patch("xnch.routing.classifier.create_memory"):
-            yield
+def no_routing_cache():
+    with patch("xnch.routing.classifier._get_redis", return_value=None):
+        yield
 
 
 class TestClassifyRequest:
@@ -67,15 +66,16 @@ class TestClassifyRequest:
         assert hasattr(route, "model_name")
         assert hasattr(route, "reason")
 
-    def test_agentmemory_recall_used_when_exact_match(self):
-        recalled = [{
-            "document": (
-                '{"raw_input": "deploy model xyz", "model_name": "ornith", '
-                '"reason": "recalled decision", "intent_class": "DECISION"}'
-            ),
-            "metadata": {"model_name": "ornith"},
-        }]
-        with patch("xnch.routing.classifier.search_memory", return_value=recalled):
+    def test_redis_recall_used_when_exact_match(self):
+        recalled = {
+            "raw_input": "deploy model xyz",
+            "model_name": "ornith",
+            "reason": "recalled decision",
+            "intent_class": "DECISION",
+        }
+        with patch("xnch.routing.classifier._cache_lookup", return_value=ModelRoute(
+            model_name="ornith", reason="recalled: recalled decision",
+        )):
             route = classify_request("deploy model xyz", "ADMIN", {"intent_class": "DECISION"})
             assert route.model_name == "ornith"
             assert "recalled" in route.reason

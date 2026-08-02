@@ -1,8 +1,6 @@
-import json
-import time
 from uuid import UUID
 
-from agentmemory import create_event, get_events
+from xnch.memory.audit_store import emit_event as _pg_emit_event
 
 
 def emit_event(
@@ -11,16 +9,10 @@ def emit_event(
     event_type: str,
     payload: dict | None = None,
 ) -> None:
-    """Fire-and-forget event emission via agentmemory."""
-    try:
-        text = f"{component}:{event_type}:{trace_id}"
-        metadata = {
-            "trace_id": str(trace_id),
-            "component": component,
-            "event_type": event_type,
-            "timestamp_ns": time.time_ns(),
-            **(payload or {}),
-        }
-        create_event(text, metadata=metadata)
-    except Exception:
-        pass
+    """Fire-and-forget audit event emission via Postgres `audit_events`."""
+    _pg_emit_event(
+        str(trace_id) if trace_id is not None else None,
+        component,
+        event_type,
+        payload,
+    )

@@ -4,7 +4,6 @@ import uuid
 from typing import Any
 
 import httpx
-from agentmemory import create_memory
 
 from ..adapters.model_adapter import ModelAdapter
 from ..config import settings
@@ -31,26 +30,6 @@ Respond with a JSON object:
 Available actions: {available_actions}
 
 Generate exactly N={options_count} options. Return valid JSON only."""
-
-
-def _persist_options(session: SessionContext, intent: Intent, options: list[PlanOption]) -> None:
-    try:
-        create_memory(
-            "generated-options",
-            json.dumps({
-                "raw_input": intent.raw_input,
-                "intent_class": intent.intent_class,
-                "action_type": intent.action_type,
-                "options_count": len(options),
-                "option_types": [o.action_type for o in options],
-            }),
-            metadata={
-                "intent_class": intent.intent_class,
-                "trace_id": str(session.trace_id),
-            },
-        )
-    except Exception:
-        pass
 
 
 def _build_context_summary(manifest: ContextManifest) -> dict:
@@ -163,7 +142,6 @@ async def generate_options(
         if options:
             emit_event(session.trace_id, "option_generator", "GENERATION_COMPLETE",
                        {"options_count": len(options), "path": "MODEL"})
-            _persist_options(session, intent, options)
             return options, GenerationPath.MODEL
     except Exception:
         pass
@@ -175,9 +153,6 @@ async def generate_options(
         context_summary=context_summary,
         n=n,
     )
-
-    if path == GenerationPath.MODEL:
-        _persist_options(session, intent, options)
 
     emit_event(session.trace_id, "option_generator", "GENERATION_COMPLETE",
                {"options_count": len(options), "path": path})
