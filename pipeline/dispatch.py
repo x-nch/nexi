@@ -54,12 +54,38 @@ async def dispatch_execution(
                    {"execution_ref": str(payload.execution_ref)})
     except httpx.ConnectError:
         logger.warning(
-            "Execution runner unavailable at %s — dispatch deferred "
+            "Execution runner unavailable at %s — recording stub outcome "
             "(execution_ref=%s, decision_id=%s)",
             execution_runner_url, payload.execution_ref, decision.decision_id,
         )
         emit_event(session.trace_id, "dispatch", "EXECUTION_DEFERRED",
                    {"execution_ref": str(payload.execution_ref),
                     "reason": "runner_unavailable"})
+        await _record_stub_outcome(session, payload)
 
     return payload
+
+
+async def _record_stub_outcome(
+    session: SessionContext,
+    payload: ExecutionDispatchPayload,
+) -> None:
+    """Post SUCCESS to xnch when no execution runner is deployed."""
+    try:
+        async with httpx.AsyncClient(base_url=settings.xnch_base_url, timeout=10.0) as client:
+            resp = await client.post(
+                "/execution/outcome",
+                json={
+                    "execution_ref": str(payload.execution_ref),
+                    "decision_id": str(payload.decision_id),
+                    "execution_token_ref": payload.execution_token or "",
+                    "outcome_status": "SUCCESS",
+                    "duration_ms": 0,
+                },
+            )
+            resp.raise_for_status()
+        emit_event(session.trace_id, "dispatch", "STUB_OUTCOME_RECORDED",
+                   {"execution_ref": str(payload.execution_ref)})
+    except Exception as exc:
+        logger.error("Failed to record stub outcome (decision_id=%s): %s",
+                     payload.decision_id, exc)

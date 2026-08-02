@@ -29,8 +29,8 @@ class Settings(BaseSettings):
     # Redis (KV cache — shared with xnch)
     redis_url: str = "unix:///tmp/xnch-redis.sock"
 
-    # Execution runner
-    execution_runner_url: str = "http://localhost:8002"
+    # Execution runner (xnch stub at /execution/execute when no dedicated runner)
+    execution_runner_url: str = "http://192.168.50.1:8001/execution"
 
     # vLLM health check endpoint (used by proactivity engine)
     vllm_health_url: str = "http://192.168.50.2:8082/health"

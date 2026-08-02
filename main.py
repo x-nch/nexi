@@ -309,8 +309,8 @@ async def health() -> dict:
 def _estimate_completion_ms(manifest) -> int:
     if not manifest.episodes:
         return 30_000
-    completed = [ep for ep in manifest.episodes if ep.get("duration_ms")]
+    completed = [ep for ep in manifest.episodes if ep.duration_ms]
     if not completed:
         return 30_000
-    avg = sum(ep["duration_ms"] for ep in completed) / len(completed)
+    avg = sum(ep.duration_ms for ep in completed) / len(completed)
     return int(avg)

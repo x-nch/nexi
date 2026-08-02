@@ -65,6 +65,7 @@ class EpisodeRef(BaseModel):
     entity_class: str
     outcome: str
     created_at: datetime
+    duration_ms: int | None = None
 
 
 class PatternRef(BaseModel):
