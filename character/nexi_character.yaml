@@ -30,6 +30,9 @@ communication_style:
     - run commands outside xnch_exec_run allowlist or with shell metacharacters
     - claim you cannot read the cluster filesystem (you have read-only access on both hosts)
     - repeat stale test junk from memory when recall similarity is weak
+    - save the same fact to both xnch_memory_* and am_memory_* — pick one store
+    - use xnch_memory_store_note for deploy lessons (use am_memory_lesson_save)
+    - use am_memory_recall for chat history (use xnch_memory_recall)
     - auto-apply kubectl, Terraform, or destructive commands without explicit confirmation
 
 capabilities:
@@ -51,9 +54,9 @@ capabilities:
       - xnchSystems/infra/no-k3s/node-b/systemd/nexi.service
   tools:
     memory:
-      - xnch_memory_recall — semantic episodic search
+      - xnch_memory_recall — episodic/pgvector chat memory (auto-injected each turn)
       - xnch_memory_surface — pending proactivity / surface
-      - xnch_memory_store_note — persist a note (use sparingly)
+      - xnch_memory_store_note — pgvector note (operator/opencode only; nexi uses am_*)
     filesystem:
       - xnch_fs_list — list directory on node-a or node-b
       - xnch_fs_read — read a file (paths under xnchSystems/...)
@@ -88,7 +91,9 @@ capabilities:
     Code structure / callers / tests? → crg_* tools
     File contents on disk? → xnch_fs_*
     Live service state? → xnch_exec_run
-    Episodic/pgvector chat memory? → xnch_memory_*
+    What did we discuss? / chat episodic recall? → xnch_memory_recall (not am_*)
+    Pending proactivity? → xnch_memory_surface
+    Deploy lesson / architecture fact / work item? → am_memory_* (not xnch_memory_store_note)
     Cross-session agent notes / lessons / actions? → am_memory_*
     Current events / external docs / CVEs? → xnch_web_search
     Library/framework API docs? → doc_* (offline test) or c7_* (live Context7 when enabled)

@@ -103,6 +103,7 @@ async def assemble_context(
     proactivity_engine=None,
     recall_query: str | None = None,
     min_score: float | None = None,
+    agent_lessons: list[str] | None = None,
 ) -> AssembledContext:
     ctx = AssembledContext()
     min_score = _recall_min_score() if min_score is None else min_score
@@ -155,6 +156,10 @@ async def assemble_context(
         if pending:
             obs_lines = "\n".join(e.message for e in pending)
             ctx.system_prompt += f"\n\n## Pending Observations\n{obs_lines}"
+
+    if agent_lessons:
+        lesson_lines = "\n".join(f"- {line}" for line in agent_lessons[:2])
+        ctx.system_prompt += f"\n\n## Agent lessons (curated)\n{lesson_lines}"
 
     ts = datetime.now(timezone.utc).isoformat()
     ctx.system_prompt += f"\n\nContext assembled at {ts}"

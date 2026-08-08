@@ -258,6 +258,23 @@ async def test_openclaw_summary_uses_raw_text_and_dedupes(mock_stores):
     assert "Build something\nSure, what should we build?" in ctx.relevant_episodes[0]
 
 
+@pytest.mark.asyncio
+async def test_assemble_context_includes_agent_lessons(mock_stores):
+    wm, pg, gs, rs, sb = mock_stores
+    ctx = await assemble_context(
+        session_id="s1",
+        raw_input="hello",
+        working_memory=wm,
+        pg_episodic=pg,
+        graph_store=gs,
+        relationship_store=rs,
+        sensory_buffer=sb,
+        agent_lessons=["Always rebuild CRG after adding packages."],
+    )
+    assert "## Agent lessons (curated)" in ctx.system_prompt
+    assert "CRG" in ctx.system_prompt
+
+
 def test_episode_line_plain_summary():
     line = _episode_line({"summary": "deployed foo", "raw_text": "full raw text"})
     assert line == "deployed foo"
