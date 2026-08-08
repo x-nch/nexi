@@ -2,21 +2,92 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import yaml
 
-
 _CHARACTER_PATH = Path(__file__).parent / "nexi_character.yaml"
+_DEFAULT_IMPORTANCE = 2.0
 
 
-def load_character() -> dict:
+def load_character() -> dict[str, Any]:
     with open(_CHARACTER_PATH) as f:
         return yaml.safe_load(f)
+
+
+def get_identity_fact_records() -> list[dict[str, Any]]:
+    """Return identity facts for episodic seeding: {raw_text, importance, type}."""
+    char = load_character()
+    records: list[dict[str, Any]] = []
+    for item in char.get("identity_facts") or []:
+        if isinstance(item, str):
+            text = item.strip()
+            importance = _DEFAULT_IMPORTANCE
+        elif isinstance(item, dict):
+            text = str(item.get("text", "")).strip()
+            importance = float(item.get("importance", _DEFAULT_IMPORTANCE))
+        else:
+            continue
+        if text:
+            records.append(
+                {"type": "identity", "raw_text": text, "importance": importance}
+            )
+    if records:
+        return records
+
+    # Legacy fallback: memory_identity.knows_about
+    for line in char.get("memory_identity", {}).get("knows_about") or []:
+        text = str(line).strip()
+        if text:
+            records.append(
+                {"type": "identity", "raw_text": text, "importance": _DEFAULT_IMPORTANCE}
+            )
+    return records
+
+
+def get_identity_fact_texts() -> list[str]:
+    return [r["raw_text"] for r in get_identity_fact_records()]
+
+
+def _format_capabilities(char: dict[str, Any]) -> list[str]:
+    cap = char.get("capabilities") or {}
+    lines: list[str] = []
+    summary = (cap.get("summary") or "").strip()
+    if summary:
+        lines.append(summary)
+
+    hosts = cap.get("hosts") or {}
+    if hosts:
+        lines.append("Hosts:")
+        for key, desc in hosts.items():
+            lines.append(f"- {key}: {desc}")
+
+    fs = cap.get("filesystem") or {}
+    if fs:
+        lines.append(
+            f"Filesystem: read-only under {fs.get('path_root', '/home/x-nch')}; "
+            f"use prefix {fs.get('path_prefix', '')} for repo files."
+        )
+        for ex in fs.get("example_paths") or []:
+            lines.append(f"  e.g. {ex}")
+
+    tools = cap.get("tools") or {}
+    if tools:
+        lines.append("Tools (invoke when you need ground truth):")
+        for group, items in tools.items():
+            if not items:
+                continue
+            lines.append(f"- {group}:")
+            for item in items:
+                lines.append(f"  - {item}")
+
+    return lines
 
 
 def build_system_prompt(
     session_memory: list[dict] | None = None,
     recent_entities: list[str] | None = None,
+    identity_facts: list[str] | None = None,
 ) -> str:
     char = load_character()
     identity = char["identity"]
@@ -29,6 +100,26 @@ def build_system_prompt(
     parts.append(f"Communication: {style['verbosity']}, {style['tone']}.")
     parts.append(f"Current time: {now}")
     parts.append("")
+
+    cap_lines = _format_capabilities(char)
+    if cap_lines:
+        parts.append("## Capabilities")
+        parts.extend(cap_lines)
+        parts.append("")
+
+    never_do = style.get("never_do") or []
+    if never_do:
+        parts.append("## Rules (never do)")
+        for rule in never_do:
+            parts.append(f"- {rule}")
+        parts.append("")
+
+    facts = identity_facts if identity_facts is not None else get_identity_fact_texts()
+    if facts:
+        parts.append("## Identity")
+        for fact in facts:
+            parts.append(f"- {fact}")
+        parts.append("")
 
     if session_memory:
         parts.append("## Session Context")

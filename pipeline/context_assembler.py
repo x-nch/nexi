@@ -1,10 +1,66 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from nexi.character.prompt_loader import get_identity_fact_texts
 from nexi.character.prompt_loader import build_system_prompt
+
+DEFAULT_RECALL_MIN_SCORE = 0.35
+_RECALL_MIN_SCORE_ENV = "XNCH_MEMORY_RECALL_MIN_SCORE"
+
+
+def _recall_min_score() -> float:
+    raw = os.environ.get(_RECALL_MIN_SCORE_ENV)
+    if raw is None:
+        return DEFAULT_RECALL_MIN_SCORE
+    try:
+        return float(raw)
+    except ValueError:
+        return DEFAULT_RECALL_MIN_SCORE
+
+
+def _episode_line(episode: dict[str, Any]) -> str:
+    """Render one episode for the system prompt.
+
+    Old episodes were stored with `OpenClaw chat: {user}` summaries; prefer the
+    (truncated) raw_text for those so the model sees real content, not the junk
+    summary. Other episodes use summary when present.
+    """
+    summary = (episode.get("summary") or "").strip()
+    raw_text = (episode.get("raw_text") or "").strip()
+    if summary.startswith("OpenClaw chat:"):
+        return (raw_text or summary)[:300]
+    return (summary or raw_text)[:300]
+
+
+def _dedupe_lines(lines: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for line in lines:
+        if line and line not in seen:
+            seen.add(line)
+            result.append(line)
+    return result
+
+
+async def _load_identity_facts(pg_episodic) -> list[str]:
+    """Identity facts from the episodic store, falling back to the seeder list."""
+    try:
+        if pg_episodic is not None and hasattr(pg_episodic, "fetch_by_type"):
+            episodes = await pg_episodic.fetch_by_type("identity", limit=20)
+            facts = [
+                (ep.get("raw_text") or ep.get("summary") or "").strip()
+                for ep in episodes or []
+            ]
+            facts = _dedupe_lines([f for f in facts if f])
+            if facts:
+                return facts
+    except Exception:
+        pass
+    return get_identity_fact_texts()
 
 
 @dataclass
@@ -45,18 +101,22 @@ async def assemble_context(
     relationship_store,
     sensory_buffer,
     proactivity_engine=None,
+    recall_query: str | None = None,
+    min_score: float | None = None,
 ) -> AssembledContext:
     ctx = AssembledContext()
+    min_score = _recall_min_score() if min_score is None else min_score
 
     recent_turns = await working_memory.get_turns(session_id, last_n=20)
     ctx.recent_turns = recent_turns
 
+    retrieve_text = recall_query or raw_input
     relevant = await pg_episodic.retrieve_similar(
-        query_text=raw_input, top_k=5
+        query_text=retrieve_text, top_k=5, min_score=min_score
     )
-    ctx.relevant_episodes = [
-        r.get("summary") or r.get("raw_text", "") for r in relevant
-    ]
+    ctx.relevant_episodes = _dedupe_lines(
+        _episode_line(r) for r in relevant
+    )
 
     entities = _extract_entity_mentions(raw_input)
     if entities:
@@ -81,11 +141,13 @@ async def assemble_context(
     recent_perceptions = await sensory_buffer.read_recent("voice", limit=3)
     ctx.perception_snippets = [p.get("data", "") for p in recent_perceptions]
 
-    session_memories = ctx.relevant_episodes[:5]
+    session_memories = [{"summary": s} for s in ctx.relevant_episodes[:5]]
     session_entities = [f"{c.get('connected_name', '')} ({c.get('rel_type', '')})" for c in ctx.entity_context[:5]]
+    identity_facts = await _load_identity_facts(pg_episodic)
     ctx.system_prompt = build_system_prompt(
-        session_memory=[{"summary": s} for s in session_memories],
+        session_memory=session_memories,
         recent_entities=session_entities,
+        identity_facts=identity_facts,
     )
 
     if proactivity_engine is not None:
