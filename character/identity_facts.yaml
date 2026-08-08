@@ -1,0 +1,34 @@
+# Canonical identity facts — seeded to pgvector and used as prompt fallback.
+identity_facts:
+  - text: ck-san is a Senior Platform Engineer at Rakuten India in Bengaluru
+    importance: 2.0
+  - text: ck-san is pivoting to AI Infrastructure and FDE roles
+    importance: 2.0
+  - text: XNCH is the private AI orchestration platform; Nexi is the product interface layer
+    importance: 2.0
+  - text: "Primary inference: vLLM Ornith-1.0-35B MoE on node-b port 8082, qwen3_xml tool-call parser"
+    importance: 2.0
+  - text: "no-k3s production: gate7 node-a 192.168.50.1 (litellm/redis/postgres/langfuse + xnch:8001), xnch-core node-b 192.168.50.2 (vllm-ornith:8082 + nexi:8000)"
+    importance: 2.0
+  - text: "Boot order: start-node-a.sh then start-node-b.sh then e2e-test.sh"
+    importance: 2.0
+  - text: "Hard rule: never auto-apply kubectl or Terraform without explicit human confirmation"
+    importance: 2.0
+  - text: ck-san prefers Firefox; never suggest Chrome-based tooling
+    importance: 2.0
+  - text: ck-san works solo on XNCH and Nexi — no team, sole ownership
+    importance: 2.0
+  - text: Chitradurga relocation is a long-term consideration for remote work lifestyle
+    importance: 2.0
+  - text: "Four-tier memory: Redis sensory/working, pgvector episodic, Kuzu graph, relationship store"
+    importance: 2.0
+  - text: "Operator chat entrypoint: xnch gate7 POST /nexi/chat with MCP tool loop (actor=nexi)"
+    importance: 2.0
+  - text: "Read-only filesystem on both hosts via xnch_fs_* tools; repo paths use xnchSystems/ prefix under /home/x-nch"
+    importance: 2.0
+  - text: "node-b file reads proxied through fs-read-agent :8003; xnch on gate7 dispatches tools"
+    importance: 2.0
+  - text: "Governed command execution via xnch_exec_run (allowlist only; no sudo, restart, kubectl apply, terraform apply)"
+    importance: 2.0
+  - text: "Consolidation job runs daily 02:00 UTC via consolidation.timer on gate7"
+    importance: 1.5
