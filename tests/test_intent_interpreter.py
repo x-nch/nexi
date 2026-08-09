@@ -42,6 +42,13 @@ def interpreter():
     return IntentInterpreter()
 
 
+@pytest.fixture(autouse=True)
+def _disable_intent_cache():
+    """Intent interpreter caches classifications in Redis; keep unit tests isolated."""
+    with patch("nexi.pipeline.intent_interpreter._get_redis", return_value=None):
+        yield
+
+
 @pytest.fixture
 def mock_httpx_client():
     """Patch httpx.AsyncClient so all instances return a controlled mock."""
@@ -159,3 +166,39 @@ async def test_rule_high_ambiguity_raises(interpreter):
         with pytest.raises(ClarificationRequired) as exc_info:
             await interpreter.interpret("fuzzy input", uuid4(), str(uuid4()))
         assert exc_info.value.ambiguity_score == 0.8
+
+
+@pytest.mark.asyncio
+async def test_intent_cache_preserves_ambiguity_score():
+    """Recalled intents must not reset ambiguity_score to 0.0."""
+    from nexi.pipeline.intent_interpreter import _persist_intent, _recall_intent
+    from nexi.models.intent import ActionType, Urgency
+
+    raw = "something random to classify"
+    intent = Intent(
+        session_id=uuid4(),
+        intent_class=IntentClass.QUERY,
+        action_type=ActionType.ANALYZE,
+        target_entity_id="unknown",
+        target_entity_class="RESOURCE",
+        urgency=Urgency.NORMAL,
+        ambiguity_score=0.5,
+        raw_input_hash="hash",
+        raw_input=raw,
+    )
+
+    mock_redis = MagicMock()
+    stored: dict[str, str] = {}
+
+    def fake_set(key: str, value: str, ex: int) -> None:
+        stored[key] = value
+
+    mock_redis.get.side_effect = lambda key: stored.get(key)
+    mock_redis.set.side_effect = fake_set
+
+    with patch("nexi.pipeline.intent_interpreter._get_redis", return_value=mock_redis):
+        _persist_intent(raw, intent)
+        recalled = _recall_intent(raw)
+
+    assert recalled is not None
+    assert recalled.ambiguity_score == 0.5

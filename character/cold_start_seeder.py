@@ -11,7 +11,7 @@ IDENTITY_FACTS = get_identity_fact_records()
 
 
 async def sync_identity_memories(episodic_store) -> int:
-    """Insert identity episodes from nexi_character.yaml that are not already stored."""
+    """Insert identity episodes from identity_facts.yaml that are not already stored."""
     from xnch.memory.pg_episodic_store import PgEpisodicStore
 
     if not isinstance(episodic_store, PgEpisodicStore):
@@ -38,7 +38,7 @@ async def sync_identity_memories(episodic_store) -> int:
         added += 1
 
     if added:
-        logger.info("Synced %d new identity fact(s) from nexi_character.yaml", added)
+        logger.info("Synced %d new identity fact(s) from identity_facts.yaml", added)
     return added
 
 

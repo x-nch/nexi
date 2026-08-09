@@ -1,0 +1,72 @@
+summary: |
+  Operator chat runs on xnch gate7 (POST /nexi/chat). You have native xnch MCP tools
+  plus bridged MCP tools: crg_* (code-review-graph), am_* (agentmemory), doc_* (offline docs test).
+  Use tools for ground truth; answer from memory only when recall is relevant.
+  Max tool rounds increases to 5 when the MCP bridge is active.
+  Full inventory and routing: GET /nexi/capabilities.
+hosts:
+  node-a: "gate7 / 192.168.50.1 — xnch :8001, Postgres, Redis, LiteLLM, Langfuse, Kuzu"
+  node-b: "xnch-core / 192.168.50.2 — vLLM Ornith :8082, nexi engine :8000, fs-read-agent :8003, exec-agent :8004"
+filesystem:
+  read_only: true
+  path_root: /home/x-nch
+  path_prefix: xnchSystems/
+  example_paths:
+    - xnchSystems/xnch/main.py
+    - xnchSystems/nexi/main.py
+    - xnchSystems/infra/no-k3s/node-b/systemd/nexi.service
+tools:
+  memory:
+    - xnch_memory_recall — episodic/pgvector chat memory (auto-injected each turn)
+    - xnch_memory_surface — pending proactivity / surface
+    - xnch_memory_store_note — pgvector note (operator/opencode only; nexi uses am_*)
+  filesystem:
+    - xnch_fs_list — list directory on node-a or node-b
+    - xnch_fs_read — read a file (paths under xnchSystems/...)
+    - xnch_fs_stat — file metadata
+    - xnch_fs_glob — find paths by pattern
+    - xnch_fs_exists — check path exists
+  system:
+    - xnch_health — xnch + redis health
+    - xnch_status — system/policy versions
+  execution:
+    - xnch_exec_run — allowlisted commands on node-a or node-b (systemctl status, journalctl, curl, git status, pytest; no sudo/restart/kubectl apply)
+  web_search:
+    - xnch_web_search — anonymous metasearch via self-hosted SearXNG on gate7 (current events, CVEs, release notes; no commercial API)
+  code_graph:
+    - crg_query_graph_tool — callers, callees, imports, tests_for (use for structure)
+    - crg_semantic_search_nodes_tool — find functions/classes by keyword
+    - crg_get_architecture_overview_tool — high-level codebase layout
+    - crg_get_impact_radius_tool — blast radius of a symbol change
+    - crg_get_review_context_tool — token-efficient snippets for review
+    - crg_detect_changes_tool — risk-scored change analysis (read-only)
+  agent_memory:
+    - am_memory_recall — cross-session agent memory search
+    - am_memory_save — persist architecture/workflow/fact to agentmemory
+    - am_memory_lesson_save — save operational lessons
+    - am_memory_lesson_recall — recall lessons by query
+    - am_memory_action_create — track work items with dependencies
+    - am_memory_action_update — update action status (done/blocked/etc.)
+  library_docs:
+    - doc_resolve-library-id — offline test: resolve library ID (FastAPI, Pydantic, MCP, LiteLLM, Kuzu)
+    - doc_query-docs — offline test: canned doc snippets (use before live Context7)
+tool_routing: |
+  Code structure / callers / tests? → crg_* tools
+  File contents on disk? → xnch_fs_*
+  Live service state? → xnch_exec_run
+  What did we discuss? / chat episodic recall? → xnch_memory_recall (not am_*)
+  Pending proactivity? → xnch_memory_surface
+  Deploy lesson / architecture fact / work item? → am_memory_* (not xnch_memory_store_note)
+  Cross-session agent notes / lessons / actions? → am_memory_*
+  Current events / external docs / CVEs? → xnch_web_search
+  Library/framework API docs? → doc_* (offline test) or c7_* (live Context7 when enabled)
+  Pipeline / governed action? → xnch_session_run
+voice:
+  mode: push_to_talk
+  client: python -m cli voice talk (gate7)
+  stt: faster-whisper/base/cpu
+  tts: piper/en_US-lessac-medium
+  endpoints:
+    - POST /nexi/voice/chat
+    - POST /nexi/voice/transcribe
+    - POST /nexi/voice/speak

@@ -138,7 +138,7 @@ def _recall_intent(raw_input: str) -> Intent | None:
             target_entity_id=data.get("entity_id", "unknown"),
             target_entity_class=data.get("entity_class", "RESOURCE"),
             urgency=Urgency(data.get("urgency", "NORMAL")),
-            ambiguity_score=0.0,
+            ambiguity_score=float(data.get("ambiguity_score", 0.0)),
             raw_input_hash="",
             raw_input=raw_input,
         )
@@ -161,6 +161,7 @@ def _persist_intent(raw_input: str, intent: Intent) -> None:
                 "entity_id": intent.target_entity_id,
                 "entity_class": intent.target_entity_class,
                 "urgency": intent.urgency,
+                "ambiguity_score": intent.ambiguity_score,
             }),
             ex=_INTENT_CACHE_TTL_S,
         )

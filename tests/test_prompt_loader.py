@@ -11,19 +11,30 @@ from nexi.character.prompt_loader import (
     get_identity_fact_records,
     get_identity_fact_texts,
     get_nexi_system_prompt,
-    load_character,
+    load_capabilities,
+    load_persona,
 )
 
 
-def test_load_character():
-    char = load_character()
-    assert "identity" in char
-    assert char["identity"]["name"] == "Nexi"
-    assert char["identity"]["address_user_as"] == "ck-san"
-    assert "persona" in char["identity"]
-    assert "communication_style" in char
-    assert "identity_facts" in char
-    assert "capabilities" in char
+def test_load_persona():
+    persona = load_persona()
+    assert "identity" in persona
+    assert persona["identity"]["name"] == "Nexi"
+    assert persona["identity"]["address_user_as"] == "ck-san"
+    assert "persona" in persona["identity"]
+    assert "communication_style" in persona
+    assert "capabilities" not in persona
+    assert "identity_facts" not in persona
+
+
+def test_load_capabilities():
+    caps = load_capabilities()
+    assert "hosts" in caps
+    assert "tools" in caps
+    assert "tool_routing" in caps
+    assert "node-a" in caps["hosts"]
+    assert "xnch_fs_read" in str(caps["tools"])
+    assert "identity" not in caps
 
 
 def test_identity_facts_from_yaml():
@@ -39,11 +50,24 @@ def test_build_system_prompt_cold_start():
     assert "Nexi" in prompt
     assert "ck-san" in prompt
     assert "UTC" in prompt
-    assert "## Capabilities" in prompt
+    assert "## Capabilities" not in prompt
+    assert "## Tools" in prompt
+    assert "GET /nexi/capabilities" in prompt
+    assert "## Voice" in prompt
+    assert "TTS" in prompt
     assert "## Rules (never do)" in prompt
     assert "## Identity" in prompt
     assert "xnch_fs_read" in prompt
     assert "## Session Context" not in prompt
+
+
+def test_build_system_prompt_with_capabilities():
+    prompt = build_system_prompt(include_capabilities=True)
+    assert "## Capabilities" in prompt
+    assert "xnch_fs_read" in prompt
+    assert "node-a" in prompt
+    assert "Tool routing:" in prompt
+    assert "crg_*" in prompt
 
 
 def test_build_system_prompt_with_memory():
@@ -68,6 +92,7 @@ def test_get_nexi_system_prompt():
     assert isinstance(prompt, str)
     assert len(prompt) > 50
     assert "Nexi" in prompt
+    assert "## Capabilities" in prompt
 
 
 def test_build_system_prompt_includes_style():
@@ -89,8 +114,15 @@ def test_get_identity_fact_texts():
     assert len(texts) >= 10
 
 
-def test_load_character_yaml_valid():
-    raw = (Path(prompt_loader.__file__).parent / "nexi_character.yaml").read_text()
-    parsed = yaml.safe_load(raw)
-    assert parsed["identity"]["name"] == "Nexi"
-    assert any("invent file contents" in item for item in parsed["communication_style"]["never_do"])
+def test_character_yamls_valid():
+    base = Path(prompt_loader.__file__).parent
+    persona = yaml.safe_load((base / "persona.yaml").read_text())
+    assert persona["identity"]["name"] == "Nexi"
+    assert any("invent file contents" in item for item in persona["communication_style"]["never_do"])
+
+    caps = yaml.safe_load((base / "capabilities.yaml").read_text())
+    assert "hosts" in caps and "tools" in caps
+
+    facts = yaml.safe_load((base / "identity_facts.yaml").read_text())
+    assert len(facts["identity_facts"]) >= 10
+    assert all(f["importance"] <= 2.0 for f in facts["identity_facts"])

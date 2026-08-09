@@ -76,6 +76,29 @@ async def test_assemble_context_basic(mock_stores):
 
 
 @pytest.mark.asyncio
+async def test_assemble_context_injects_voice_snippets(mock_stores):
+    wm, pg, gs, rs, sb = mock_stores
+    sb.read_recent = AsyncMock(
+        return_value=[
+            {"data": "check vllm status", "timestamp": 1.0},
+            {"transcript": "legacy transcript line", "timestamp": 0.5},
+        ]
+    )
+    ctx = await assemble_context(
+        session_id="test-sess",
+        raw_input="hello",
+        working_memory=wm,
+        pg_episodic=pg,
+        graph_store=gs,
+        relationship_store=rs,
+        sensory_buffer=sb,
+    )
+    assert "## Recent voice" in ctx.system_prompt
+    assert "check vllm status" in ctx.system_prompt
+    assert "legacy transcript line" in ctx.system_prompt
+
+
+@pytest.mark.asyncio
 async def test_assemble_context_to_messages(mock_stores):
     wm, pg, gs, rs, sb = mock_stores
     ctx = await assemble_context(
@@ -92,6 +115,8 @@ async def test_assemble_context_to_messages(mock_stores):
     assert msgs[0]["role"] == "system"
     assert msgs[-1] == {"role": "user", "content": "hello"}
     assert "Nexi" in msgs[0]["content"]
+    assert "## Tools" in msgs[0]["content"]
+    assert "## Capabilities" not in msgs[0]["content"]
 
 
 @pytest.mark.asyncio

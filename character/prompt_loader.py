@@ -6,20 +6,32 @@ from typing import Any
 
 import yaml
 
-_CHARACTER_PATH = Path(__file__).parent / "nexi_character.yaml"
+_PERSONA_PATH = Path(__file__).parent / "persona.yaml"
+_CAPABILITIES_PATH = Path(__file__).parent / "capabilities.yaml"
+_FACTS_PATH = Path(__file__).parent / "identity_facts.yaml"
 _DEFAULT_IMPORTANCE = 2.0
 
 
-def load_character() -> dict[str, Any]:
-    with open(_CHARACTER_PATH) as f:
+def _load_yaml(path: Path) -> dict[str, Any]:
+    with open(path) as f:
         return yaml.safe_load(f)
+
+
+def load_persona() -> dict[str, Any]:
+    """Identity and communication style — the stable persona signal."""
+    return _load_yaml(_PERSONA_PATH)
+
+
+def load_capabilities() -> dict[str, Any]:
+    """Operational capabilities: hosts, filesystem, tools, tool routing."""
+    return _load_yaml(_CAPABILITIES_PATH)
 
 
 def get_identity_fact_records() -> list[dict[str, Any]]:
     """Return identity facts for episodic seeding: {raw_text, importance, type}."""
-    char = load_character()
+    facts = _load_yaml(_FACTS_PATH)
     records: list[dict[str, Any]] = []
-    for item in char.get("identity_facts") or []:
+    for item in facts.get("identity_facts") or []:
         if isinstance(item, str):
             text = item.strip()
             importance = _DEFAULT_IMPORTANCE
@@ -32,16 +44,6 @@ def get_identity_fact_records() -> list[dict[str, Any]]:
             records.append(
                 {"type": "identity", "raw_text": text, "importance": importance}
             )
-    if records:
-        return records
-
-    # Legacy fallback: memory_identity.knows_about
-    for line in char.get("memory_identity", {}).get("knows_about") or []:
-        text = str(line).strip()
-        if text:
-            records.append(
-                {"type": "identity", "raw_text": text, "importance": _DEFAULT_IMPORTANCE}
-            )
     return records
 
 
@@ -49,8 +51,7 @@ def get_identity_fact_texts() -> list[str]:
     return [r["raw_text"] for r in get_identity_fact_records()]
 
 
-def _format_capabilities(char: dict[str, Any]) -> list[str]:
-    cap = char.get("capabilities") or {}
+def _format_capabilities(cap: dict[str, Any]) -> list[str]:
     lines: list[str] = []
     summary = (cap.get("summary") or "").strip()
     if summary:
@@ -81,6 +82,14 @@ def _format_capabilities(char: dict[str, Any]) -> list[str]:
             for item in items:
                 lines.append(f"  - {item}")
 
+    routing = (cap.get("tool_routing") or "").strip()
+    if routing:
+        lines.append("Tool routing:")
+        for line in routing.splitlines():
+            line = line.strip()
+            if line:
+                lines.append(f"- {line}")
+
     return lines
 
 
@@ -88,11 +97,13 @@ def build_system_prompt(
     session_memory: list[dict] | None = None,
     recent_entities: list[str] | None = None,
     identity_facts: list[str] | None = None,
+    include_capabilities: bool = False,
 ) -> str:
-    char = load_character()
-    identity = char["identity"]
-    style = char["communication_style"]
+    persona = load_persona()
+    identity = persona["identity"]
+    style = persona["communication_style"]
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    cap = load_capabilities()
 
     parts = [f"You are {identity['name']}.", identity["persona"]]
     parts.append("")
@@ -101,11 +112,31 @@ def build_system_prompt(
     parts.append(f"Current time: {now}")
     parts.append("")
 
-    cap_lines = _format_capabilities(char)
-    if cap_lines:
-        parts.append("## Capabilities")
-        parts.extend(cap_lines)
-        parts.append("")
+    if include_capabilities:
+        cap_lines = _format_capabilities(cap)
+        if cap_lines:
+            parts.append("## Capabilities")
+            parts.extend(cap_lines)
+            parts.append("")
+    else:
+        summary = (cap.get("summary") or "").strip()
+        if summary:
+            parts.append("## Tools")
+            parts.append(summary)
+            parts.append("")
+        voice = cap.get("voice") or {}
+        if voice:
+            parts.append("## Voice")
+            parts.append(
+                f"Push-to-talk on gate7 ({voice.get('client', 'cli voice talk')}). "
+                f"STT: {voice.get('stt', 'faster-whisper')}; "
+                f"TTS: {voice.get('tts', 'piper')}."
+            )
+            parts.append(
+                "On /nexi/voice/chat your reply is synthesized and played aloud — "
+                "respond naturally; do not claim you are text-only."
+            )
+            parts.append("")
 
     never_do = style.get("never_do") or []
     if never_do:
@@ -138,4 +169,4 @@ def build_system_prompt(
 
 
 def get_nexi_system_prompt() -> str:
-    return build_system_prompt()
+    return build_system_prompt(include_capabilities=True)

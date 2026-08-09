@@ -104,6 +104,7 @@ async def assemble_context(
     recall_query: str | None = None,
     min_score: float | None = None,
     agent_lessons: list[str] | None = None,
+    voice_mode: bool = False,
 ) -> AssembledContext:
     ctx = AssembledContext()
     min_score = _recall_min_score() if min_score is None else min_score
@@ -140,7 +141,11 @@ async def assemble_context(
             await pg_episodic.bump_recall(rid)
 
     recent_perceptions = await sensory_buffer.read_recent("voice", limit=3)
-    ctx.perception_snippets = [p.get("data", "") for p in recent_perceptions]
+    ctx.perception_snippets = [
+        (p.get("data") or p.get("transcript") or "").strip()
+        for p in recent_perceptions
+        if (p.get("data") or p.get("transcript") or "").strip()
+    ]
 
     session_memories = [{"summary": s} for s in ctx.relevant_episodes[:5]]
     session_entities = [f"{c.get('connected_name', '')} ({c.get('rel_type', '')})" for c in ctx.entity_context[:5]]
@@ -160,6 +165,18 @@ async def assemble_context(
     if agent_lessons:
         lesson_lines = "\n".join(f"- {line}" for line in agent_lessons[:2])
         ctx.system_prompt += f"\n\n## Agent lessons (curated)\n{lesson_lines}"
+
+    if ctx.perception_snippets:
+        voice_lines = "\n".join(f"- {snippet}" for snippet in ctx.perception_snippets[:3])
+        ctx.system_prompt += f"\n\n## Recent voice\n{voice_lines}"
+
+    if voice_mode:
+        ctx.system_prompt += (
+            "\n\n## Active channel: voice\n"
+            "The operator is on push-to-talk voice. STT transcribed their speech; "
+            "your reply is synthesized with Piper TTS and played on the speaker. "
+            "Respond to what they said — do not claim you are text-only or lack a voice motor."
+        )
 
     ts = datetime.now(timezone.utc).isoformat()
     ctx.system_prompt += f"\n\nContext assembled at {ts}"
