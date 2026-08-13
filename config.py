@@ -9,17 +9,17 @@ class Settings(BaseSettings):
     xnch_public_key_path: str = "~/.xnch/keys/public.pem"
 
     # Model adapter
-    vllm_primary_url: str = "http://localhost:8000/v1"
+    vllm_primary_url: str = "http://localhost:8083/v1"
     vllm_primary_timeout_s: float = 30.0
     vllm_secondary_url: str = ""
     vllm_secondary_timeout_s: float = 45.0
-    model_id: str = "mistralai/Mistral-7B-Instruct-v0.3"
+    model_id: str = "qwen2.5-vl-7b"
     options_count: int = 5
 
     # LiteLLM proxy
     litellm_proxy_url: str = "http://localhost:4000/v1"
     litellm_proxy_timeout_s: float = 60.0
-    intent_classifier_model: str = "ornith"
+    intent_classifier_model: str = "qwen2.5-vl-7b"
 
     # Session
     session_ttl_s: int = 120
@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     execution_runner_url: str = "http://192.168.50.1:8001/execution"
 
     # vLLM health check endpoint (used by proactivity engine)
-    vllm_health_url: str = "http://192.168.50.2:8082/health"
+    vllm_health_url: str = "http://localhost:8083/health"
 
     # Audit
     audit_events_path: str = "~/.xnch/audit/events.jsonl"
