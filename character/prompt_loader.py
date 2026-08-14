@@ -90,6 +90,20 @@ def _format_capabilities(cap: dict[str, Any]) -> list[str]:
             if line:
                 lines.append(f"- {line}")
 
+    voice = cap.get("voice") or {}
+    if voice:
+        lines.append("Voice (TTS — you CAN reply aloud):")
+        lines.append(
+            f"- push-to-talk; STT {voice.get('stt', 'faster-whisper')}; "
+            f"TTS {voice.get('tts', 'piper')}"
+        )
+        for ep in voice.get("endpoints") or []:
+            lines.append(f"  - {ep}")
+        lines.append(
+            "- On /nexi/voice/chat your reply is synthesized and played aloud. "
+            "Voice IS available — never claim you are text-only or lack TTS."
+        )
+
     return lines
 
 
