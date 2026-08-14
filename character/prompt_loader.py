@@ -125,6 +125,12 @@ def build_system_prompt(
     parts.append(f"Communication: {style['verbosity']}, {style['tone']}.")
     parts.append(f"Current time: {now}")
     parts.append("")
+    # Voice/TTS is a real capability — small models otherwise deny it exists.
+    parts.append(
+        "You have VOICE (TTS): your replies can be spoken aloud via piper. "
+        "You are NOT text-only. If the user asks about voice, confirm it works."
+    )
+    parts.append("")
 
     if include_capabilities:
         cap_lines = _format_capabilities(cap)
