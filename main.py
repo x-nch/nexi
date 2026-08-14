@@ -2,6 +2,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -10,7 +11,16 @@ from fastapi.responses import JSONResponse as JSONResponse
 from pydantic import BaseModel
 
 from .adapters import XnchClient, ModelAdapter
+from .character.capability_builder import (
+    build_capabilities,
+    fetch_tool_inventory,
+    get_generated_overlay_path,
+    render_overlay,
+    write_overlay,
+)
+from .character.prompt_loader import load_capabilities
 from .config import settings
+from .infra.discovery import build_snapshot, probe_services
 from .models import SessionContext
 from .pipeline import (
     IntentInterpreter, ClarificationRequired,
@@ -37,6 +47,58 @@ _model_adapter: ModelAdapter | None = None
 _policy_filter: PolicyFilter | None = None
 _intent_interpreter: IntentInterpreter | None = None
 
+# Auto-refreshed capability / infra awareness snapshot.
+_capability_state: dict[str, Any] = {
+    "capabilities": None,
+    "snapshot": None,
+    "last_refresh": None,
+}
+
+
+async def _refresh_capabilities(force_write: bool) -> dict[str, Any]:
+    """Probe + rebuild the capabilities snapshot; optionally persist the overlay."""
+    snapshot = build_snapshot()
+    snapshot.status = await probe_services(snapshot)
+    inventory = await fetch_tool_inventory()
+    caps = build_capabilities(snapshot, inventory)
+
+    changed = False
+    if force_write:
+        content = render_overlay(caps)
+        changed = write_overlay(get_generated_overlay_path(), content)
+
+    _capability_state.update(
+        capabilities=caps,
+        snapshot=snapshot,
+        last_refresh=datetime.now(timezone.utc),
+    )
+    if changed:
+        emit_event(
+            str(uuid4()), "nexi", "CAPABILITIES_UPDATED",
+            {"generated_at": caps.get("generated_at")},
+        )
+    return caps
+
+
+async def _capability_refresh_loop() -> None:
+    """Startup build then periodic full refresh + realtime probe updates."""
+    try:
+        await _refresh_capabilities(force_write=True)
+    except Exception as exc:
+        logger.warning("Initial capability refresh failed: %s", exc)
+
+    elapsed = 0.0
+    while True:
+        await asyncio.sleep(settings.probe_interval_s)
+        elapsed += settings.probe_interval_s
+        force_write = elapsed >= settings.capability_refresh_interval_s
+        if force_write:
+            elapsed = 0.0
+        try:
+            await _refresh_capabilities(force_write=force_write)
+        except Exception as exc:
+            logger.warning("Periodic capability refresh failed: %s", exc)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -45,7 +107,17 @@ async def lifespan(app: FastAPI):
     _model_adapter = ModelAdapter()
     _policy_filter = PolicyFilter(_xnch)
     _intent_interpreter = IntentInterpreter()
+
+    capability_task: asyncio.Task | None = None
+    if settings.capability_auto_refresh:
+        capability_task = asyncio.get_running_loop().create_task(_capability_refresh_loop())
+
     yield
+
+    if capability_task is not None:
+        capability_task.cancel()
+        with asyncio.suppress(asyncio.CancelledError):
+            await capability_task
     await _xnch.aclose()
 
 
@@ -300,6 +372,28 @@ async def outcome_callback(body: dict[str, Any]) -> dict:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "version": "0.1.0"}
+
+
+@app.get("/nexi/capabilities")
+async def nexi_capabilities() -> dict[str, Any]:
+    """Realtime merged capabilities (live probe status via the refresh loop)."""
+    caps = _capability_state.get("capabilities")
+    if caps is None:
+        return load_capabilities()
+    return caps
+
+
+@app.post("/nexi/refresh")
+async def nexi_refresh() -> dict[str, Any]:
+    """On-demand full refresh: topology → tools → probes → overlay write."""
+    caps = await _refresh_capabilities(force_write=True)
+    return {
+        "status": "ok",
+        "generated_at": caps.get("generated_at"),
+        "hosts": sorted(caps.get("hosts", {})),
+        "healthy": caps.get("status", {}).get("healthy", []),
+        "down": caps.get("status", {}).get("down", []),
+    }
 
 
 # ---------------------------------------------------------------------------

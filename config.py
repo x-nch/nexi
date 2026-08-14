@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +39,18 @@ class Settings(BaseSettings):
 
     # Audit
     audit_events_path: str = "~/.xnch/audit/events.jsonl"
+
+    # Capability / infra auto-refresh
+    capabilities_generated_path: str = "~/.xnch/nexi-capabilities.generated.yaml"
+    mcp_servers_path: str = "~/.xnch/mcp-servers.yaml"
+    infra_manifests_path: Path = Path(__file__).resolve().parents[2] / "infra" / "no-k3s"
+    exec_policy_path: str = "~/.xnch/exec-policy.yaml"
+    fs_policy_path: str = "~/.xnch/fs-policy.yaml"
+    capability_refresh_interval_s: int = 300
+    probe_interval_s: int = 60
+    probe_timeout_s: float = 2.0
+    xnch_tools_endpoint: str = "/nexi/tools"
+    capability_auto_refresh: bool = True
 
 
 settings = Settings()

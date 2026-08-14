@@ -1,15 +1,25 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from nexi.config import settings
+
+logger = logging.getLogger(__name__)
+
 _PERSONA_PATH = Path(__file__).parent / "persona.yaml"
 _CAPABILITIES_PATH = Path(__file__).parent / "capabilities.yaml"
 _FACTS_PATH = Path(__file__).parent / "identity_facts.yaml"
 _DEFAULT_IMPORTANCE = 2.0
+
+# Keys the auto-refresh generator owns. When a generated overlay is present these
+# override the hand-maintained base; everything else (summary, voice, …) stays
+# authoritative in capabilities.yaml.
+_GENERATED_KEYS = ("hosts", "tools", "tool_routing", "filesystem", "status")
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -22,9 +32,45 @@ def load_persona() -> dict[str, Any]:
     return _load_yaml(_PERSONA_PATH)
 
 
+def get_generated_overlay_path() -> Path:
+    """Primary path the capability builder writes to (env-overridable)."""
+    return Path(settings.capabilities_generated_path).expanduser()
+
+
+def _load_generated_overlay() -> dict[str, Any] | None:
+    """Best-effort read of the auto-generated overlay; falls back to repo copy."""
+    candidates = [
+        get_generated_overlay_path(),
+        Path(__file__).parent / "capabilities.generated.yaml",
+    ]
+    for raw in candidates:
+        path = Path(raw).expanduser()
+        if not path.is_file():
+            continue
+        try:
+            return _load_yaml(path)
+        except Exception as exc:
+            logger.warning("Failed to load generated capabilities overlay %s: %s", path, exc)
+            return None
+    return None
+
+
 def load_capabilities() -> dict[str, Any]:
-    """Operational capabilities: hosts, filesystem, tools, tool routing."""
-    return _load_yaml(_CAPABILITIES_PATH)
+    """Operational capabilities: static base merged with the generated overlay."""
+    base = _load_yaml(_CAPABILITIES_PATH)
+    overlay = _load_generated_overlay()
+    if overlay:
+        for key in _GENERATED_KEYS:
+            if key not in overlay:
+                continue
+            value = overlay[key]
+            # Never let a partial/empty generated section clobber the richer base.
+            if isinstance(value, dict) and not value:
+                continue
+            if value in (None, ""):
+                continue
+            base[key] = value
+    return base
 
 
 def get_identity_fact_records() -> list[dict[str, Any]]:
@@ -89,6 +135,15 @@ def _format_capabilities(cap: dict[str, Any]) -> list[str]:
             line = line.strip()
             if line:
                 lines.append(f"- {line}")
+
+    status = cap.get("status") or {}
+    if status:
+        lines.append("Status (live infra probes):")
+        lines.append(f"- checked_at: {status.get('checked_at', 'unknown')}")
+        if status.get("healthy"):
+            lines.append(f"- healthy: {', '.join(status['healthy'])}")
+        if status.get("down"):
+            lines.append(f"- DOWN: {', '.join(status['down'])}")
 
     voice = cap.get("voice") or {}
     if voice:

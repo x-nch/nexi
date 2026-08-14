@@ -37,6 +37,78 @@ def test_load_capabilities():
     assert "identity" not in caps
 
 
+def test_load_capabilities_merges_generated_overlay(monkeypatch, tmp_path):
+    overlay = tmp_path / "generated.yaml"
+    overlay.write_text(
+        """
+generated_at: "2026-08-14T00:00:00Z"
+hosts:
+  node-a:
+    role: control-plane
+    services: {xnch: "192.168.50.1:8001"}
+tools:
+  filesystem: ["xnch_fs_read"]
+tool_routing: "File contents on disk? → xnch_fs_*"
+filesystem: {read_only: true, roots: ["/home/x-nch"]}
+status: {healthy: ["xnch"], down: [], checked_at: "t"}
+"""
+    )
+    monkeypatch.setattr("nexi.character.prompt_loader.settings.capabilities_generated_path", str(overlay))
+
+    caps = load_capabilities()
+    # generated keys win
+    assert caps["hosts"]["node-a"]["role"] == "control-plane"
+    assert caps["tools"]["filesystem"] == ["xnch_fs_read"]
+    assert caps["tool_routing"] == "File contents on disk? → xnch_fs_*"
+    assert caps["status"]["healthy"] == ["xnch"]
+    # base-only keys are preserved
+    assert "voice" in caps
+    assert "summary" in caps
+
+
+def test_load_capabilities_empty_generated_section_keeps_base(monkeypatch, tmp_path):
+    overlay = tmp_path / "generated.yaml"
+    overlay.write_text(
+        """
+generated_at: "2026-08-14T00:00:00Z"
+hosts:
+  node-a:
+    role: control-plane
+    services: {xnch: "192.168.50.1:8001"}
+tools: {}
+tool_routing: ""
+"""
+    )
+    monkeypatch.setattr("nexi.character.prompt_loader.settings.capabilities_generated_path", str(overlay))
+
+    caps = load_capabilities()
+    # empty generated tools/tool_routing must not clobber the richer base
+    assert "xnch_fs_read" in str(caps["tools"])
+    assert "crg_*" in caps["tool_routing"]
+    # non-empty generated hosts still applies
+    assert caps["hosts"]["node-a"]["role"] == "control-plane"
+
+
+def test_load_capabilities_missing_overlay_uses_base(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "nexi.character.prompt_loader.settings.capabilities_generated_path",
+        str(tmp_path / "does-not-exist.yaml"),
+    )
+    caps = load_capabilities()
+    assert "hosts" in caps
+    assert "node-a" in caps["hosts"]
+    assert "voice" in caps
+
+
+def test_load_capabilities_bad_overlay_falls_back(monkeypatch, tmp_path):
+    overlay = tmp_path / "generated.yaml"
+    overlay.write_text("::: not valid yaml")
+    monkeypatch.setattr("nexi.character.prompt_loader.settings.capabilities_generated_path", str(overlay))
+    caps = load_capabilities()
+    assert "hosts" in caps
+    assert "node-a" in caps["hosts"]
+
+
 def test_identity_facts_from_yaml():
     records = get_identity_fact_records()
     assert len(records) >= 10

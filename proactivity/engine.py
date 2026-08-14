@@ -9,6 +9,7 @@ from uuid import uuid4
 import httpx
 
 from nexi.config import settings
+from nexi.infra.discovery import build_snapshot, probe_services, service_priority
 
 logger = logging.getLogger(__name__)
 
@@ -94,21 +95,23 @@ class ProactivityEngine:
 
         if self._http is not None:
             try:
-                resp = await self._http.get(settings.vllm_health_url)
-                if resp.status_code != 200:
+                snapshot = build_snapshot()
+                status = await probe_services(snapshot, http_client=self._http)
+                for name in status["down"]:
+                    if name == "vllm-ornith":
+                        message = "Ornith (vLLM on Node B) is not responding."
+                    else:
+                        message = f"{name} is not responding."
                     events.append(ProactivityEvent(
-                        trigger="inference_down",
-                        message="Ornith (vLLM on Node B) is not responding.",
-                        priority=5,
+                        trigger="inference_down" if name in {
+                            "vllm-ornith", "vllm-qwen", "nexi"
+                        } else "service_down",
+                        message=message,
+                        priority=service_priority(name),
                         expires_at=now + timedelta(hours=1),
                     ))
-            except Exception:
-                events.append(ProactivityEvent(
-                    trigger="inference_down",
-                    message="Ornith (vLLM on Node B) is not responding.",
-                    priority=5,
-                    expires_at=now + timedelta(hours=1),
-                ))
+            except Exception as e:
+                logger.warning("Infra probe (Rule 3) failed: %s", e)
 
         if db_path is not None:
             try:
