@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     # Capability / infra auto-refresh
     capabilities_generated_path: str = "~/.xnch/nexi-capabilities.generated.yaml"
     mcp_servers_path: str = "~/.xnch/mcp-servers.yaml"
-    infra_manifests_path: Path = Path(__file__).resolve().parents[2] / "infra" / "no-k3s"
+    infra_manifests_path: Path = Path(__file__).resolve().parents[1] / "infra" / "no-k3s"
     exec_policy_path: str = "~/.xnch/exec-policy.yaml"
     fs_policy_path: str = "~/.xnch/fs-policy.yaml"
     capability_refresh_interval_s: int = 300

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from nexi.config import settings
 from nexi.infra.discovery import (
     ServiceSpec,
     build_snapshot,
@@ -11,6 +12,13 @@ from nexi.infra.discovery import (
     discover_services,
     probe_services,
 )
+
+
+def test_default_manifest_path_points_at_repo():
+    from pathlib import Path
+
+    assert settings.infra_manifests_path == Path("infra/no-k3s").resolve()
+    assert settings.infra_manifests_path.is_dir()
 
 
 def _make_manifest_tree(tmp_path):
