@@ -6,6 +6,7 @@ import pytest
 
 from nexi.goal.driver import _make_goal_session, _run_goal_step, goal_driver_loop
 from nexi.models import Actor, ActorRole, Goal, SessionContext
+from nexi.pipeline.intent_interpreter import ClarificationRequired
 from nexi.pipeline.run import PipelinePassResult
 
 
@@ -164,6 +165,78 @@ async def test_goal_driver_loop_marks_active_on_step_error_and_keeps_polling():
     args, kwargs = xnch.update_goal.call_args
     assert args[0] == str(goal.goal_id)
     assert kwargs["status"] == "ACTIVE"
+
+
+async def test_goal_driver_loop_blocks_on_clarification_required():
+    """ClarificationRequired blocks the goal — no retry (no human to clarify)."""
+    goal = _make_goal()
+    xnch = _make_xnch()
+    xnch.claim_next_goal = AsyncMock(side_effect=[goal, None])
+
+    class _StopClock(Exception):
+        pass
+
+    sleep_calls = 0
+
+    async def _fake_sleep(_interval: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls >= 3:
+            raise _StopClock()
+
+    with (
+        patch("nexi.goal.driver.asyncio.sleep", new=_fake_sleep),
+        patch(
+            "nexi.goal.driver._run_goal_step",
+            new=AsyncMock(side_effect=ClarificationRequired(uuid4(), 0.9)),
+        ),
+    ):
+        with pytest.raises(_StopClock):
+            await goal_driver_loop(
+                xnch=xnch, model_adapter=MagicMock(),
+                policy_filter=MagicMock(), intent_interpreter=MagicMock(),
+            )
+
+    xnch.update_goal.assert_awaited_once()
+    args, kwargs = xnch.update_goal.call_args
+    assert args[0] == str(goal.goal_id)
+    assert kwargs["status"] == "BLOCKED"
+
+
+async def test_goal_driver_loop_blocks_after_max_consecutive_step_errors():
+    """Repeated step errors reach goal_max_consecutive_step_errors → BLOCKED."""
+    goal = _make_goal()
+    xnch = _make_xnch()
+    xnch.claim_next_goal = AsyncMock(side_effect=[goal, goal, goal, None])
+
+    class _StopClock(Exception):
+        pass
+
+    sleep_calls = 0
+
+    async def _fake_sleep(_interval: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls >= 5:
+            raise _StopClock()
+
+    with (
+        patch("nexi.goal.driver.asyncio.sleep", new=_fake_sleep),
+        patch(
+            "nexi.goal.driver._run_goal_step",
+            new=AsyncMock(side_effect=RuntimeError("step boom")),
+        ),
+    ):
+        with pytest.raises(_StopClock):
+            await goal_driver_loop(
+                xnch=xnch, model_adapter=MagicMock(),
+                policy_filter=MagicMock(), intent_interpreter=MagicMock(),
+            )
+
+    calls = xnch.update_goal.await_args_list
+    statuses = [c.kwargs["status"] for c in calls]
+    assert statuses == ["ACTIVE", "ACTIVE", "BLOCKED"]
+    assert calls[-1].args[0] == str(goal.goal_id)
 
 
 async def test_goal_driver_loop_survives_recovery_update_failure():

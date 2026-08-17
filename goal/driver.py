@@ -4,11 +4,15 @@ import logging
 
 from nexi.config import settings
 from nexi.models import SessionContext, Actor, ActorRole, Goal
+from nexi.pipeline.intent_interpreter import ClarificationRequired
 from nexi.pipeline.run import run_pipeline_pass
 from .planner import build_step_input, build_simulation
 
 logger = logging.getLogger(__name__)
 _LEASE_OWNER = "nexi-goal-driver"
+# In-memory consecutive step-error counter (keyed by str(goal_id)).
+# Acceptable here because the goal driver is a single serialized loop.
+_consecutive_step_errors: dict[str, int] = {}
 
 
 async def _make_goal_session(xnch) -> SessionContext:
@@ -57,11 +61,28 @@ async def goal_driver_loop(*, xnch, model_adapter, policy_filter, intent_interpr
             await _run_goal_step(goal, xnch=xnch, model_adapter=model_adapter,
                                  policy_filter=policy_filter,
                                  intent_interpreter=intent_interpreter)
+            _consecutive_step_errors.pop(str(goal.goal_id), None)
         except asyncio.CancelledError:
             raise
+        except ClarificationRequired as exc:
+            _consecutive_step_errors.pop(str(goal.goal_id), None)
+            logger.warning("goal step needs clarification (goal=%s): %s — blocking", goal.goal_id, exc)
+            try:
+                await xnch.update_goal(str(goal.goal_id), status="BLOCKED",
+                                       progress="blocked: clarification required")
+            except Exception as recovery_exc:
+                logger.error("goal recovery update failed (goal=%s): %s", goal.goal_id, recovery_exc)
         except Exception as exc:
+            key = str(goal.goal_id)
+            count = _consecutive_step_errors.get(key, 0) + 1
+            _consecutive_step_errors[key] = count
             logger.error("goal step failed (goal=%s): %s", goal.goal_id, exc)
             try:
-                await xnch.update_goal(str(goal.goal_id), status="ACTIVE")
+                if count >= settings.goal_max_consecutive_step_errors:
+                    _consecutive_step_errors.pop(key, None)
+                    await xnch.update_goal(str(goal.goal_id), status="BLOCKED",
+                                           progress=f"blocked: {count} consecutive step errors")
+                else:
+                    await xnch.update_goal(str(goal.goal_id), status="ACTIVE")
             except Exception as recovery_exc:
                 logger.error("goal recovery update failed (goal=%s): %s", goal.goal_id, recovery_exc)

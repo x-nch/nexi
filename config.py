@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     goal_poll_interval_s: int = 5
     goal_default_max_steps: int = 10
     goal_default_failure_threshold: int = 3
+    goal_max_consecutive_step_errors: int = 3
 
 
 settings = Settings()
