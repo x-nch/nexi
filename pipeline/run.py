@@ -5,7 +5,6 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from fastapi.responses import JSONResponse
 
 from ..adapters import XnchClient, ModelAdapter
 from ..config import settings
@@ -116,7 +115,7 @@ async def run_pipeline_pass(
         raise HTTPException(status_code=422, detail=str(exc))
 
     if not compiled.nodes:
-        return JSONResponse({'error': 'compiled DAG has no nodes'}, status_code=422)
+        raise HTTPException(status_code=422, detail="compiled DAG has no nodes")
     node = compiled.nodes[0]
     validated_action_spec = {
         "type": node.action_type,
