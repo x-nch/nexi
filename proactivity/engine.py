@@ -104,7 +104,7 @@ class ProactivityEngine:
                         message = f"{name} is not responding."
                     events.append(ProactivityEvent(
                         trigger="inference_down" if name in {
-                            "vllm-ornith", "vllm-qwen", "nexi"
+                            "vllm-ornith", "nexi"
                         } else "service_down",
                         message=message,
                         priority=service_priority(name),

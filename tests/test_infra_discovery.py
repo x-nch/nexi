@@ -87,7 +87,7 @@ def test_discover_services_defaults_when_no_manifests(tmp_path):
     assert by_name["xnch"].port == 8001
     assert by_name["xnch"].source == "default"
     assert by_name["nexi"].port == 8000
-    assert by_name["media-gateway"].port == 8090
+    assert by_name["vllm-ornith"].port == 8082
 
 
 def test_discover_policies(tmp_path):
@@ -166,5 +166,5 @@ async def test_probe_services_classifies_up_and_down(tmp_path):
 def test_service_priority_prefers_inference():
     from nexi.infra.discovery import service_priority
 
-    assert service_priority("vllm-ornith") > service_priority("media-gateway")
+    assert service_priority("vllm-ornith") > service_priority("xnch")
     assert service_priority("nexi") >= 3
