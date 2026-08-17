@@ -1,6 +1,6 @@
 """Step 11 — Execution dispatch to execution-runner."""
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import logging
@@ -22,6 +22,8 @@ async def dispatch_execution(
     verdict: VerdictResponse,
     validated_action_spec: dict[str, Any],
     execution_runner_url: str,
+    simulation: dict[str, Any] | None = None,
+    goal_id: UUID | None = None,
 ) -> ExecutionDispatchPayload:
     if not verdict.execution_token:
         raise ValueError("No execution token in verdict response")
@@ -33,6 +35,8 @@ async def dispatch_execution(
         action_spec=validated_action_spec,
         execution_token=verdict.execution_token,
         token_ttl_ms=verdict.token_ttl_ms,
+        simulation=simulation,
+        goal_id=goal_id,
     )
 
     emit_event(session.trace_id, "dispatch", "EXECUTION_DISPATCH",
@@ -73,16 +77,16 @@ async def _record_stub_outcome(
     """Post SUCCESS to xnch when no execution runner is deployed."""
     try:
         async with httpx.AsyncClient(base_url=settings.xnch_base_url, timeout=10.0) as client:
-            resp = await client.post(
-                "/execution/outcome",
-                json={
-                    "execution_ref": str(payload.execution_ref),
-                    "decision_id": str(payload.decision_id),
-                    "execution_token_ref": payload.execution_token or "",
-                    "outcome_status": "SUCCESS",
-                    "duration_ms": 0,
-                },
-            )
+            outcome_json: dict[str, Any] = {
+                "execution_ref": str(payload.execution_ref),
+                "decision_id": str(payload.decision_id),
+                "execution_token_ref": payload.execution_token or "",
+                "outcome_status": "SUCCESS",
+                "duration_ms": 0,
+            }
+            if payload.goal_id is not None:
+                outcome_json["goal_id"] = str(payload.goal_id)
+            resp = await client.post("/execution/outcome", json=outcome_json)
             resp.raise_for_status()
         emit_event(session.trace_id, "dispatch", "STUB_OUTCOME_RECORDED",
                    {"execution_ref": str(payload.execution_ref)})
