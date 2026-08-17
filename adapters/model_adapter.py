@@ -171,7 +171,8 @@ class ModelAdapter:
     ) -> list[PlanOption]:
         prompt_text = json.dumps(prompt_payload)
         t0 = time.time()
-        async with httpx.AsyncClient(base_url=base_url, timeout=timeout) as client:
+        _headers = {"Authorization": f"Bearer {settings.litellm_api_key}"} if settings.litellm_api_key else {}
+        async with httpx.AsyncClient(base_url=base_url, timeout=timeout, headers=_headers) as client:
             resp = await client.post(
                 "/chat/completions",
                 json={

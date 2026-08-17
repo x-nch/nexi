@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     # LiteLLM proxy
     litellm_proxy_url: str = "http://localhost:4000/v1"
     litellm_proxy_timeout_s: float = 60.0
+    litellm_api_key: str = ""
     intent_classifier_model: str = "ornith"
     reflection_model: str = "ornith"
     reflection_enabled: bool = True
