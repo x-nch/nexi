@@ -6,7 +6,7 @@ summary: |
   Full inventory and routing: GET /nexi/capabilities.
 hosts:
   node-a: "gate7 / 192.168.50.1 — xnch :8001, Postgres, Redis, LiteLLM, Langfuse, Kuzu, SearXNG :8888"
-  node-b: "xnch-core / 192.168.50.2 — vLLM Qwen2.5-VL :8083, nexi engine :8000, ComfyUI :8188, media-gateway :8090, fs-read-agent :8003, exec-agent :8004"
+  node-b: "xnch-core / 192.168.50.2 — vLLM Ornith :8082, nexi engine :8000, fs-read-agent :8003, exec-agent :8004"
 filesystem:
   read_only: true
   path_root: /home/x-nch
@@ -63,7 +63,7 @@ tool_routing: |
   Pipeline / governed action? → xnch_session_run
 voice:
   mode: push_to_talk
-  client: web chat mic button (transcribe into input) or CLI (python -m cli voice talk)
+  client: CLI (python -m cli voice talk)
   stt: faster-whisper/base/cpu
   tts: piper/en_US-lessac-medium
   endpoints:

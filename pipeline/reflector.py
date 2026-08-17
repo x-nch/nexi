@@ -124,14 +124,21 @@ async def _default_llm_fn(
     context_summary: dict[str, Any],
 ) -> dict[str, Any]:
     """Reflection via LiteLLM proxy; returns parsed JSON dict."""
-    user_prompt = json.dumps({
-        "outcome": outcome,
-        "prediction_delta": prediction_delta,
-        "context_summary": context_summary,
-    })
+    user_prompt = (
+        "Based on the following outcome data, generate a reflection JSON.\n"
+        "Return exactly: {\"verdict\": \"...\", \"lesson\": \"...\", \"insight\": \"...\", \"applicability\": \"...\"}\n\n"
+        + json.dumps({
+            "outcome": outcome,
+            "prediction_delta": prediction_delta,
+            "context_summary": context_summary,
+        })
+    )
     async with httpx.AsyncClient(
         base_url=settings.litellm_proxy_url, timeout=settings.litellm_proxy_timeout_s
     ) as client:
+        headers = {}
+        if settings.litellm_api_key:
+            headers["Authorization"] = f"Bearer {settings.litellm_api_key}"
         resp = await client.post(
             "/chat/completions",
             json={
@@ -144,10 +151,11 @@ async def _default_llm_fn(
                 "temperature": 0.2,
                 "max_tokens": 400,
             },
+            headers=headers,
         )
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
-        parsed = json.loads(content)
+        parsed = json.loads(content) if isinstance(content, str) else content
         return parsed if isinstance(parsed, dict) else {}
 
 

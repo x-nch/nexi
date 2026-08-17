@@ -254,8 +254,10 @@ class IntentInterpreter:
     ) -> Intent:
         emit_event(trace_id, "intent_interpreter", "LLM_CLASSIFY_START")
 
+        _headers = {"Authorization": f"Bearer {settings.litellm_api_key}"} if settings.litellm_api_key else {}
         async with httpx.AsyncClient(
-            base_url=settings.litellm_proxy_url, timeout=settings.litellm_proxy_timeout_s
+            base_url=settings.litellm_proxy_url, timeout=settings.litellm_proxy_timeout_s,
+            headers=_headers,
         ) as client:
             resp = await client.post(
                 "/chat/completions",

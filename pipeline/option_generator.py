@@ -112,8 +112,10 @@ async def generate_options(
 
     try:
         system_msg, user_msg = _build_option_prompt(intent, context_summary, n)
+        _headers = {"Authorization": f"Bearer {settings.litellm_api_key}"} if settings.litellm_api_key else {}
         async with httpx.AsyncClient(
-            base_url=settings.litellm_proxy_url, timeout=settings.litellm_proxy_timeout_s
+            base_url=settings.litellm_proxy_url, timeout=settings.litellm_proxy_timeout_s,
+            headers=_headers,
         ) as client:
             resp = await client.post(
                 "/chat/completions",

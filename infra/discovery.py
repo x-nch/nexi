@@ -41,15 +41,12 @@ DEFAULT_SERVICES: dict[str, tuple[str, int]] = {
     "searxng": ("node-a", 8888),
     "nexi": ("node-b", 8000),
     "vllm-ornith": ("node-b", 8082),
-    "vllm-qwen": ("node-b", 8083),
-    "media-gateway": ("node-b", 8090),
     "fs-read-agent": ("node-b", 8003),
     "exec-agent": ("node-b", 8004),
-    "comfy-ui": ("node-b", 8188),
 }
 
 _PORT_RE = re.compile(r"(?:--?port[=\s]+(\d{2,5}))|(?::(\d{2,5})(?:/|\s|$))")
-_INFERENCE_PRIORITY = {"vllm-ornith": 5, "vllm-qwen": 4, "nexi": 3}
+_INFERENCE_PRIORITY = {"vllm-ornith": 5, "nexi": 3}
 
 
 @dataclass

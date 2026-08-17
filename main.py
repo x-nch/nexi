@@ -234,11 +234,12 @@ async def outcome_callback(body: dict[str, Any]) -> dict:
     # Summary step — reflect on the outcome and persist an experiential lesson.
     # Fire-and-forget: reflection must never block or break the outcome callback.
     intent_class = body.get("intent_class")
+    action_type_val = body.get("action_type")
     if (
         _reflector is not None
         and settings.reflection_enabled
         and intent_class
-        and body.get("action_type")
+        and action_type_val
     ):
         asyncio.create_task(
             _reflector.reflect(
