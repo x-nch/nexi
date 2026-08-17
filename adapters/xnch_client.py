@@ -12,6 +12,7 @@ from ..models import (
     PolicyDryRunResponse,
     DecisionRecord,
     VerdictResponse,
+    Goal,
 )
 from ..utils.audit import emit_event
 
@@ -115,7 +116,16 @@ class XnchClient:
         intent_class: str = "",
         entity_class: str = "",
         outcome_score_predicted: float = 0.5,
+        goal_id: UUID | None = None,
     ) -> VerdictResponse:
+        context: dict[str, Any] = {
+            "session_id": str(session.session_id),
+            "nexi_reasoning_ref": str(decision.decision_id),
+            "system_state_version": session.system_state_version,
+            "outcome_score_predicted": outcome_score_predicted,
+        }
+        if goal_id is not None:
+            context["goal_id"] = str(goal_id)
         body = {
             "request_id": str(decision.decision_id),
             "actor": {
@@ -130,12 +140,7 @@ class XnchClient:
                 "intent_class": intent_class,
                 "entity_class": entity_class,
             },
-            "context": {
-                "session_id": str(session.session_id),
-                "nexi_reasoning_ref": str(decision.decision_id),
-                "system_state_version": session.system_state_version,
-                "outcome_score_predicted": outcome_score_predicted,
-            },
+            "context": context,
         }
         resp = await self._http.post("/verdict", json=body)
         resp.raise_for_status()
@@ -213,5 +218,34 @@ class XnchClient:
 
     async def get_weight_config(self, intent_class: str) -> dict[str, Any]:
         resp = await self._http.get("/governance/weights", params={"intent_class": intent_class})
+        resp.raise_for_status()
+        return resp.json()
+
+    # ------------------------------------------------------------------
+    # Goal tracking: claim / update / system state
+    # ------------------------------------------------------------------
+
+    async def claim_next_goal(self, lease_owner: str) -> Goal | None:
+        resp = await self._http.post("/goals/claim", json={"lease_owner": lease_owner})
+        resp.raise_for_status()
+        data = resp.json()
+        return Goal.model_validate(data) if data else None
+
+    async def update_goal(
+        self,
+        goal_id: str,
+        *,
+        status: str | None = None,
+        progress: str | None = None,
+    ) -> Goal:
+        resp = await self._http.post(
+            f"/goals/{goal_id}/update",
+            json={"status": status, "progress": progress},
+        )
+        resp.raise_for_status()
+        return Goal.model_validate(resp.json())
+
+    async def get_system_state(self) -> dict[str, Any]:
+        resp = await self._http.get("/system/state")
         resp.raise_for_status()
         return resp.json()
