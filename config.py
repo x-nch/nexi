@@ -54,5 +54,11 @@ class Settings(BaseSettings):
     xnch_tools_endpoint: str = "/nexi/tools"
     capability_auto_refresh: bool = True
 
+    # Goal tracking driver loop
+    goal_driver_enabled: bool = False
+    goal_poll_interval_s: int = 5
+    goal_default_max_steps: int = 10
+    goal_default_failure_threshold: int = 3
+
 
 settings = Settings()

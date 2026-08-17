@@ -105,8 +105,19 @@ async def lifespan(app: FastAPI):
     if settings.capability_auto_refresh:
         capability_task = asyncio.get_running_loop().create_task(_capability_refresh_loop())
 
+    goal_task: asyncio.Task | None = None
+    if settings.goal_driver_enabled:
+        from .goal.driver import goal_driver_loop
+        goal_task = asyncio.get_running_loop().create_task(
+            goal_driver_loop(xnch=_xnch, model_adapter=_model_adapter,
+                             policy_filter=_policy_filter, intent_interpreter=_intent_interpreter))
+
     yield
 
+    if goal_task is not None:
+        goal_task.cancel()
+        with asyncio.suppress(asyncio.CancelledError):
+            await goal_task
     if capability_task is not None:
         capability_task.cancel()
         with asyncio.suppress(asyncio.CancelledError):
