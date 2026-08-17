@@ -23,6 +23,7 @@ from .outcomes import (
     ExperienceRef,
 )
 from .dag import DAGNode, CompiledDAG
+from .goal import Goal, GoalStatus
 
 __all__ = [
     "Intent", "IntentClass", "ActionType", "Urgency",
@@ -32,4 +33,5 @@ __all__ = [
     "VerdictResponse", "ExecutionDispatchPayload", "ExecutionOutcome", "OutcomeStatus",
     "Episode", "ContextManifest", "EpisodeRef", "PatternRef", "PolicyRef", "ExperienceRef",
     "DAGNode", "CompiledDAG",
+    "Goal", "GoalStatus",
 ]
