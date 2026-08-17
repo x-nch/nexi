@@ -17,7 +17,14 @@ from nexi.infra.discovery import (
 def test_default_manifest_path_points_at_repo():
     from pathlib import Path
 
-    assert settings.infra_manifests_path == Path("infra/no-k3s").resolve()
+    # config.py resolves infra_manifests_path from its own __file__ via
+    # parents[1]. Compute the expected value from the same base so the test
+    # matches config's logic regardless of cwd or package layout.
+    import nexi.config as config_mod
+
+    config_path = Path(config_mod.__file__).resolve()
+    expected = config_path.parents[1] / "infra" / "no-k3s"
+    assert settings.infra_manifests_path == expected
     assert settings.infra_manifests_path.is_dir()
 
 
