@@ -336,12 +336,7 @@ async def session_start(
 async def outcome_callback(body: dict[str, Any]) -> dict:
     """Step 14 — xnch fires this after writing execution outcome to episodic store."""
     trace_id = body.get("trace_id", "unknown")
-    intent_class_dbg = body.get("intent_class", "")
-    action_type_dbg = body.get("action_type", "")
-    logger.warning("CALLBACK_BODY_DEBUG: intent_class=%r action_type=%r keys=%s",
-                   intent_class_dbg, action_type_dbg, list(body.keys()))
-    emit_event(trace_id, "nexi", "OUTCOME_CALLBACK_RECEIVED",
-               {"intent_class": intent_class_dbg, "action_type": action_type_dbg})
+    emit_event(trace_id, "nexi", "OUTCOME_CALLBACK_RECEIVED")
 
     # Compute prediction delta and write back to xnch
     outcome_score_predicted = body.get("outcome_score_predicted", 0.5)
@@ -376,8 +371,6 @@ async def outcome_callback(body: dict[str, Any]) -> dict:
     # Fire-and-forget: reflection must never block or break the outcome callback.
     intent_class = body.get("intent_class")
     action_type_val = body.get("action_type")
-    logger.warning("REFLECTION_CHECK: reflector=%s, enabled=%s, intent_class=%r, action_type=%r",
-                _reflector is not None, settings.reflection_enabled, intent_class, action_type_val)
     if (
         _reflector is not None
         and settings.reflection_enabled
