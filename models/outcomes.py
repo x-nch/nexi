@@ -82,6 +82,22 @@ class PolicyRef(BaseModel):
     enforcement_level: str
 
 
+class ExperienceRef(BaseModel):
+    experience_id: UUID
+    context_signature: str
+    intent_class: str
+    action_type: str
+    entity_class: str
+    actor_role: str
+    outcome: str
+    lesson: str
+    insight: str
+    verdict: str
+    confidence: float
+    applicability: str
+    created_at: datetime
+
+
 class ContextManifest(BaseModel):
     manifest_id: UUID = Field(default_factory=uuid4)
     session_id: UUID
@@ -90,3 +106,4 @@ class ContextManifest(BaseModel):
     episodes: list[EpisodeRef] = Field(default_factory=list)
     patterns: list[PatternRef] = Field(default_factory=list)
     policies: list[PolicyRef] = Field(default_factory=list)
+    experiences: list[ExperienceRef] = Field(default_factory=list)

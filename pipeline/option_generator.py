@@ -46,13 +46,21 @@ def _build_context_summary(manifest: ContextManifest) -> dict:
     if manifest.patterns:
         dominant = max(manifest.patterns, key=lambda p: p.confidence)
 
-    return {
+    summary = {
         "recent_outcomes": f"{outcomes['S']}S/{outcomes['P']}P/{outcomes['F']}F",
         "dominant_pattern": (
             f"{dominant.success_rate:.2f} success (conf={dominant.confidence:.2f})"
             if dominant else "no pattern"
         ),
     }
+
+    if manifest.experiences:
+        ranked = sorted(manifest.experiences, key=lambda e: e.confidence, reverse=True)
+        summary["recent_lessons"] = [
+            f"{e.lesson} ({e.verdict})" for e in ranked
+        ]
+
+    return summary
 
 
 def _build_option_prompt(intent: Intent, context_summary: dict, n: int) -> str:

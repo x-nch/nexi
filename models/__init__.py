@@ -20,6 +20,7 @@ from .outcomes import (
     EpisodeRef,
     PatternRef,
     PolicyRef,
+    ExperienceRef,
 )
 from .dag import DAGNode, CompiledDAG
 
@@ -29,6 +30,6 @@ __all__ = [
     "PlanOption", "PolicyDryRunResponse", "PolicyVerdict",
     "EvaluatedOption", "Scores", "DecisionRecord", "SelectionRationale", "GenerationPath",
     "VerdictResponse", "ExecutionDispatchPayload", "ExecutionOutcome", "OutcomeStatus",
-    "Episode", "ContextManifest", "EpisodeRef", "PatternRef", "PolicyRef",
+    "Episode", "ContextManifest", "EpisodeRef", "PatternRef", "PolicyRef", "ExperienceRef",
     "DAGNode", "CompiledDAG",
 ]

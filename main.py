@@ -33,6 +33,7 @@ from .pipeline import (
     dispatch_execution,
 )
 from .pipeline.dispatch import TokenExpired
+from .pipeline.reflector import Reflector, build_reflector
 from .utils.audit import emit_event
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ _xnch: XnchClient | None = None
 _model_adapter: ModelAdapter | None = None
 _policy_filter: PolicyFilter | None = None
 _intent_interpreter: IntentInterpreter | None = None
+_reflector: Reflector | None = None
 
 # Auto-refreshed capability / infra awareness snapshot.
 _capability_state: dict[str, Any] = {
@@ -102,11 +104,12 @@ async def _capability_refresh_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _xnch, _model_adapter, _policy_filter, _intent_interpreter
+    global _xnch, _model_adapter, _policy_filter, _intent_interpreter, _reflector
     _xnch = XnchClient()
     _model_adapter = ModelAdapter()
     _policy_filter = PolicyFilter(_xnch)
     _intent_interpreter = IntentInterpreter()
+    _reflector = build_reflector(_xnch) if settings.reflection_enabled else None
 
     capability_task: asyncio.Task | None = None
     if settings.capability_auto_refresh:
@@ -363,6 +366,32 @@ async def outcome_callback(body: dict[str, Any]) -> dict:
         except Exception as exc:
             logger.error("Memory write failed (will retry): %s", exc)
             # TODO: enqueue for exponential backoff retry (max 5 attempts)
+
+    # Summary step — reflect on the outcome and persist an experiential lesson.
+    # Fire-and-forget: reflection must never block or break the outcome callback.
+    intent_class = body.get("intent_class")
+    if (
+        _reflector is not None
+        and settings.reflection_enabled
+        and intent_class
+        and body.get("action_type")
+    ):
+        asyncio.create_task(
+            _reflector.reflect(
+                session_id=body.get("session_id", "unknown"),
+                trace_id=trace_id,
+                intent_class=intent_class,
+                action_type=body["action_type"],
+                entity_class=body.get("entity_class", ""),
+                actor_role=body.get("actor_role", "agent"),
+                outcome=body.get("outcome_status", "UNKNOWN"),
+                prediction_delta=prediction_delta,
+                context_summary={
+                    "outcome_score_predicted": outcome_score_predicted,
+                    "early_flag": early_flag,
+                },
+            )
+        )
 
     emit_event(trace_id, "nexi", "PREDICTION_DELTA_WRITTEN",
                {"prediction_delta": prediction_delta, "early_flag": early_flag})

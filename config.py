@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     litellm_proxy_url: str = "http://localhost:4000/v1"
     litellm_proxy_timeout_s: float = 60.0
     intent_classifier_model: str = "qwen2.5-vl-7b"
+    reflection_model: str = "qwen2.5-vl-7b"
+    reflection_enabled: bool = True
 
     # Session
     session_ttl_s: int = 120

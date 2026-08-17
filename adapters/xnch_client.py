@@ -158,11 +158,50 @@ class XnchClient:
         body = {
             "session_id": str(session.session_id),
             "actor_id": session.actor.id,
+            "actor_role": session.actor.role.lower(),
             "write_type": "EPISODE_PREDICTION_UPDATE",
             "payload": {
                 "episode_id": str(episode_id),
                 "prediction_delta": prediction_delta,
                 "early_reextraction_flag": early_reextraction_flag,
+            },
+        }
+        resp = await self._http.post("/memory/write", json=body)
+        resp.raise_for_status()
+
+    # ------------------------------------------------------------------
+    # Step 14: memory/write — experiential reflection (Summary output)
+    # ------------------------------------------------------------------
+
+    async def write_experience(
+        self,
+        context_signature: str,
+        intent_class: str,
+        action_type: str,
+        entity_class: str,
+        actor_role: str,
+        outcome: str,
+        lesson: str,
+        insight: str,
+        verdict: str,
+        applicability: str,
+    ) -> None:
+        body = {
+            "session_id": "system",
+            "actor_id": "nexi",
+            "actor_role": "nexi",
+            "write_type": "EXPERIENCE_REFLECTION",
+            "payload": {
+                "context_signature": context_signature,
+                "intent_class": intent_class,
+                "action_type": action_type,
+                "entity_class": entity_class,
+                "actor_role": actor_role,
+                "outcome": outcome,
+                "lesson": lesson,
+                "insight": insight,
+                "verdict": verdict,
+                "applicability": applicability,
             },
         }
         resp = await self._http.post("/memory/write", json=body)
