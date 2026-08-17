@@ -124,11 +124,15 @@ async def _default_llm_fn(
     context_summary: dict[str, Any],
 ) -> dict[str, Any]:
     """Reflection via LiteLLM proxy; returns parsed JSON dict."""
-    user_prompt = json.dumps({
-        "outcome": outcome,
-        "prediction_delta": prediction_delta,
-        "context_summary": context_summary,
-    })
+    user_prompt = (
+        "Based on the following outcome data, generate a reflection JSON.\n"
+        "Return exactly: {\"verdict\": \"...\", \"lesson\": \"...\", \"insight\": \"...\", \"applicability\": \"...\"}\n\n"
+        + json.dumps({
+            "outcome": outcome,
+            "prediction_delta": prediction_delta,
+            "context_summary": context_summary,
+        })
+    )
     async with httpx.AsyncClient(
         base_url=settings.litellm_proxy_url, timeout=settings.litellm_proxy_timeout_s
     ) as client:
