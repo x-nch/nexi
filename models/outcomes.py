@@ -31,6 +31,8 @@ class ExecutionDispatchPayload(BaseModel):
     action_spec: dict[str, Any]
     execution_token: str
     token_ttl_ms: int
+    simulation: dict[str, Any] | None = None
+    goal_id: UUID | None = None
 
 
 class ExecutionOutcome(BaseModel):
