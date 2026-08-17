@@ -128,3 +128,74 @@ async def test_goal_driver_loop_polls_and_runs_one_step():
 
     assert xnch.claim_next_goal.await_count >= 2
     step_mock.assert_awaited_once()
+
+
+async def test_goal_driver_loop_marks_active_on_step_error_and_keeps_polling():
+    """A step failure marks the goal ACTIVE and the loop survives (no crash)."""
+    goal = _make_goal()
+    xnch = _make_xnch()
+    xnch.claim_next_goal = AsyncMock(side_effect=[goal, None])
+
+    class _StopClock(Exception):
+        pass
+
+    sleep_calls = 0
+
+    async def _fake_sleep(_interval: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls >= 3:
+            raise _StopClock()
+
+    with (
+        patch("nexi.goal.driver.asyncio.sleep", new=_fake_sleep),
+        patch(
+            "nexi.goal.driver._run_goal_step",
+            new=AsyncMock(side_effect=RuntimeError("step boom")),
+        ),
+    ):
+        with pytest.raises(_StopClock):
+            await goal_driver_loop(
+                xnch=xnch, model_adapter=MagicMock(),
+                policy_filter=MagicMock(), intent_interpreter=MagicMock(),
+            )
+
+    xnch.update_goal.assert_awaited_once()
+    args, kwargs = xnch.update_goal.call_args
+    assert args[0] == str(goal.goal_id)
+    assert kwargs["status"] == "ACTIVE"
+
+
+async def test_goal_driver_loop_survives_recovery_update_failure():
+    """A failed recovery update_goal is logged, not propagated — loop keeps polling."""
+    goal = _make_goal()
+    xnch = _make_xnch()
+    xnch.claim_next_goal = AsyncMock(side_effect=[goal, None])
+    xnch.update_goal = AsyncMock(side_effect=RuntimeError("xnch down"))
+
+    class _StopClock(Exception):
+        pass
+
+    sleep_calls = 0
+
+    async def _fake_sleep(_interval: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls >= 3:
+            raise _StopClock()
+
+    with (
+        patch("nexi.goal.driver.asyncio.sleep", new=_fake_sleep),
+        patch(
+            "nexi.goal.driver._run_goal_step",
+            new=AsyncMock(side_effect=RuntimeError("step boom")),
+        ),
+    ):
+        with pytest.raises(_StopClock):
+            await goal_driver_loop(
+                xnch=xnch, model_adapter=MagicMock(),
+                policy_filter=MagicMock(), intent_interpreter=MagicMock(),
+            )
+
+    # Recovery update_goal was attempted (and its failure was swallowed).
+    xnch.update_goal.assert_awaited_once()

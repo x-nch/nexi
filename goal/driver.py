@@ -61,4 +61,7 @@ async def goal_driver_loop(*, xnch, model_adapter, policy_filter, intent_interpr
             raise
         except Exception as exc:
             logger.error("goal step failed (goal=%s): %s", goal.goal_id, exc)
-            await xnch.update_goal(str(goal.goal_id), status="ACTIVE")
+            try:
+                await xnch.update_goal(str(goal.goal_id), status="ACTIVE")
+            except Exception as recovery_exc:
+                logger.error("goal recovery update failed (goal=%s): %s", goal.goal_id, recovery_exc)
