@@ -151,7 +151,8 @@ async def _default_llm_fn(
         )
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
-        parsed = json.loads(content)
+        logger.warning("REFLECTOR_LLM_RAW: %s", content[:500] if isinstance(content, str) else str(content)[:500])
+        parsed = json.loads(content) if isinstance(content, str) else content
         return parsed if isinstance(parsed, dict) else {}
 
 
