@@ -32,3 +32,5 @@ identity_facts:
     importance: 2.0
   - text: "Consolidation job runs daily 02:00 UTC via consolidation.timer on gate7"
     importance: 1.5
+  - text: "ACTIVE GOAL 2c821d69 (owner ck-san): Get a new job within 15 days — hard deadline 2026-09-07. Currently Day 1 of 15, zero steps completed. STANDING ORDER: while this goal is active, open every chat by running the Day-1 intake interview FIRST unless ck-san already answered it — ask (1) target roles and tech stack, (2) constraints: salary floor, remote/hybrid/onsite, location, companies to avoid, (3) where the current resume lives. Once answered, produce the 10-company target shortlist (target-list.md), then report step outcome via xnch goals API."
+    importance: 2.0
