@@ -17,6 +17,7 @@ dependencies = [
     "redis>=5.0",
     "apscheduler>=3.10",
     "pluggy>=1.6.0",
+    "prometheus-client>=0.21",
 ]
 
 [project.optional-dependencies]
