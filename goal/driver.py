@@ -4,8 +4,9 @@ import logging
 
 from nexi.config import settings
 from nexi.models import SessionContext, Actor, ActorRole, Goal
+from nexi.observability.metrics import GOAL_CLAIM, GOAL_STEP
 from nexi.pipeline.intent_interpreter import ClarificationRequired
-from nexi.pipeline.run import run_pipeline_pass
+from nexi.pipeline.run import PipelinePassResult, run_pipeline_pass
 from .planner import build_step_input, build_simulation
 
 logger = logging.getLogger(__name__)
@@ -13,6 +14,16 @@ _LEASE_OWNER = "nexi-goal-driver"
 # In-memory consecutive step-error counter (keyed by str(goal_id)).
 # Acceptable here because the goal driver is a single serialized loop.
 _consecutive_step_errors: dict[str, int] = {}
+
+
+async def _claim_once(xnch) -> Goal | None:
+    try:
+        goal = await xnch.claim_next_goal(_LEASE_OWNER)
+    except Exception:
+        GOAL_CLAIM.labels(result="error").inc()
+        raise
+    GOAL_CLAIM.labels(result="claimed" if goal is not None else "none").inc()
+    return goal
 
 
 async def _make_goal_session(xnch) -> SessionContext:
@@ -35,23 +46,35 @@ async def _make_goal_session(xnch) -> SessionContext:
 async def _run_goal_step(goal: Goal, *, xnch, model_adapter, policy_filter, intent_interpreter) -> None:
     goal_dict = goal.model_dump(mode="json")
     session = await _make_goal_session(xnch)
-    result = await run_pipeline_pass(
-        xnch=xnch, model_adapter=model_adapter, policy_filter=policy_filter,
-        intent_interpreter=intent_interpreter, session=session,
-        raw_input=build_step_input(goal_dict),
-        simulation=build_simulation(goal_dict),
-        goal_id=goal.goal_id,
-    )
+    try:
+        result: PipelinePassResult = await run_pipeline_pass(
+            xnch=xnch, model_adapter=model_adapter, policy_filter=policy_filter,
+            intent_interpreter=intent_interpreter, session=session,
+            raw_input=build_step_input(goal_dict),
+            simulation=build_simulation(goal_dict),
+            goal_id=goal.goal_id,
+        )
+    except ClarificationRequired:
+        GOAL_STEP.labels(result="clarification").inc()
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        GOAL_STEP.labels(result="error").inc()
+        raise
     if result.status != "EXECUTING":
+        GOAL_STEP.labels(result="blocked").inc()
         await xnch.update_goal(str(goal.goal_id), status="BLOCKED",
                                progress=f"blocked: {result.status}")
+        return
+    GOAL_STEP.labels(result="executing").inc()
 
 
 async def goal_driver_loop(*, xnch, model_adapter, policy_filter, intent_interpreter) -> None:
     while True:
         await asyncio.sleep(settings.goal_poll_interval_s)
         try:
-            goal = await xnch.claim_next_goal(_LEASE_OWNER)
+            goal = await _claim_once(xnch)
         except Exception as exc:
             logger.warning("goal claim failed: %s", exc)
             continue

@@ -21,6 +21,8 @@ from .character.prompt_loader import load_capabilities
 from .config import settings
 from .infra.discovery import build_snapshot, probe_services
 from .models import SessionContext
+from .observability import install_metrics_middleware, metrics_endpoint
+from .observability.metrics import OUTCOME_CALLBACK
 from .pipeline import IntentInterpreter, ClarificationRequired, PolicyFilter
 from .pipeline.run import run_pipeline_pass
 from .pipeline.reflector import Reflector, build_reflector
@@ -137,6 +139,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Nexi", version="0.1.0", lifespan=lifespan)
 
+if settings.metrics_enabled:
+    install_metrics_middleware(app)
+    app.add_api_route("/metrics", metrics_endpoint, methods=["GET"], include_in_schema=False)
+
 
 # ---------------------------------------------------------------------------
 # Request / response schemas
@@ -221,6 +227,7 @@ async def outcome_callback(body: dict[str, Any]) -> dict:
     # Retry with backoff handled by caller if this fails
     session_id = body.get("session_id")
     episode_id = body.get("episode_id")
+    callback_result = "skipped"
     if session_id and episode_id:
         try:
             # Build minimal session for the write call
@@ -237,9 +244,12 @@ async def outcome_callback(body: dict[str, Any]) -> dict:
             await _xnch.write_prediction_update(
                 minimal_session, UUID(episode_id), prediction_delta, early_flag
             )
+            callback_result = "recorded"
         except Exception as exc:
             logger.error("Memory write failed (will retry): %s", exc)
+            callback_result = "write_failed"
             # TODO: enqueue for exponential backoff retry (max 5 attempts)
+    OUTCOME_CALLBACK.labels(result=callback_result).inc()
 
     # Summary step — reflect on the outcome and persist an experiential lesson.
     # Fire-and-forget: reflection must never block or break the outcome callback.

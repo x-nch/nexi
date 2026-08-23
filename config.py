@@ -1,10 +1,15 @@
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NEXI_", env_file=".env")
+
+    # Prometheus instrumentation
+    metrics_enabled: bool = True
+    metrics_allow_cidrs: list[str] = Field(default_factory=lambda: ["127.0.0.1", "::1", "192.168.50.0/24"])
 
     # xnch
     xnch_base_url: str = "http://localhost:8001"
