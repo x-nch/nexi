@@ -112,8 +112,18 @@ async def lifespan(app: FastAPI):
             goal_driver_loop(xnch=_xnch, model_adapter=_model_adapter,
                              policy_filter=_policy_filter, intent_interpreter=_intent_interpreter))
 
+    workflow_task: asyncio.Task | None = None
+    if settings.workflow_executor_enabled:
+        from .workflow.executor import workflow_executor_loop
+        workflow_task = asyncio.get_running_loop().create_task(
+            workflow_executor_loop(xnch=_xnch))
+
     yield
 
+    if workflow_task is not None:
+        workflow_task.cancel()
+        with asyncio.suppress(asyncio.CancelledError):
+            await workflow_task
     if goal_task is not None:
         goal_task.cancel()
         with asyncio.suppress(asyncio.CancelledError):

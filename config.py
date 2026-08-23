@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     # Goal tracking driver loop
     goal_driver_enabled: bool = False
     goal_poll_interval_s: int = 5
+
+    # Workflow executor (P2): claims APPROVED steps from xnch and runs them
+    # through the pipeline. Requires xnch side workflow_executor_enabled=True.
+    workflow_executor_enabled: bool = False
+    workflow_poll_interval_s: int = 5
     goal_default_max_steps: int = 10
     goal_default_failure_threshold: int = 3
     goal_max_consecutive_step_errors: int = 3
