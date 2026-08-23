@@ -245,6 +245,32 @@ class XnchClient:
         resp.raise_for_status()
         return Goal.model_validate(resp.json())
 
+    # ------------------------------------------------------------------
+    # Workflow steps: claim / outcome (P2)
+    # ------------------------------------------------------------------
+
+    async def claim_workflow_step(
+        self, lease_owner: str, ttl_s: int = 120
+    ) -> dict[str, Any] | None:
+        resp = await self._http.post(
+            "/workflows/steps/claim",
+            json={"lease_owner": lease_owner, "ttl_s": ttl_s},
+        )
+        resp.raise_for_status()
+        if resp.status_code == 204 or not resp.json():
+            return None
+        return resp.json()
+
+    async def post_step_outcome(
+        self, step_uuid: str, *, outcome_status: str
+    ) -> dict[str, Any]:
+        resp = await self._http.post(
+            f"/workflows/steps/{step_uuid}/outcome",
+            json={"outcome_status": outcome_status},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def get_system_state(self) -> dict[str, Any]:
         resp = await self._http.get("/system/state")
         resp.raise_for_status()
