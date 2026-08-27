@@ -330,3 +330,20 @@ def test_assembled_context_defaults():
     assert ctx.entity_context == []
     assert ctx.relationship_context == []
     assert ctx.perception_snippets == []
+
+
+@pytest.mark.asyncio
+async def test_assemble_context_exposes_prompt_segments(mock_stores):
+    wm, pg, gs, rs, sb = mock_stores
+    ctx = await assemble_context(
+        session_id="s1", raw_input="deploy Gemma 4 model",
+        working_memory=wm, pg_episodic=pg, graph_store=gs,
+        relationship_store=rs, sensory_buffer=sb,
+    )
+    assert ctx.prompt_segments is not None
+    # The assembled system prompt is exactly stable + dynamic
+    assert ctx.prompt_segments.stable + ctx.prompt_segments.dynamic == ctx.system_prompt
+    # Dynamic holds session/recall-specific content; stable does not
+    assert "previous deployment episode" in ctx.prompt_segments.dynamic
+    assert "previous deployment episode" not in ctx.prompt_segments.stable
+    assert "Nexi" in ctx.prompt_segments.stable

@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from nexi.character.prompt_loader import PromptSegments, build_prompt_segments
 from nexi.character.prompt_loader import get_identity_fact_texts
-from nexi.character.prompt_loader import build_system_prompt
 
 DEFAULT_RECALL_MIN_SCORE = 0.35
 _RECALL_MIN_SCORE_ENV = "XNCH_MEMORY_RECALL_MIN_SCORE"
@@ -71,6 +71,7 @@ class AssembledContext:
     entity_context: list[dict] = field(default_factory=list)
     relationship_context: list[dict] = field(default_factory=list)
     perception_snippets: list[str] = field(default_factory=list)
+    prompt_segments: PromptSegments | None = field(default=None)
 
     def to_messages(self, raw_input: str) -> list[dict]:
         msgs = [{"role": "system", "content": self.system_prompt}]
@@ -150,28 +151,30 @@ async def assemble_context(
     session_memories = [{"summary": s} for s in ctx.relevant_episodes[:5]]
     session_entities = [f"{c.get('connected_name', '')} ({c.get('rel_type', '')})" for c in ctx.entity_context[:5]]
     identity_facts = await _load_identity_facts(pg_episodic)
-    ctx.system_prompt = build_system_prompt(
+
+    segs = build_prompt_segments(
         session_memory=session_memories,
         recent_entities=session_entities,
         identity_facts=identity_facts,
     )
+    dyn = segs.dynamic
 
     if proactivity_engine is not None:
         pending = await proactivity_engine.get_pending()
         if pending:
             obs_lines = "\n".join(e.message for e in pending)
-            ctx.system_prompt += f"\n\n## Pending Observations\n{obs_lines}"
+            dyn += f"\n\n## Pending Observations\n{obs_lines}"
 
     if agent_lessons:
         lesson_lines = "\n".join(f"- {line}" for line in agent_lessons[:2])
-        ctx.system_prompt += f"\n\n## Agent lessons (curated)\n{lesson_lines}"
+        dyn += f"\n\n## Agent lessons (curated)\n{lesson_lines}"
 
     if ctx.perception_snippets:
         voice_lines = "\n".join(f"- {snippet}" for snippet in ctx.perception_snippets[:3])
-        ctx.system_prompt += f"\n\n## Recent voice\n{voice_lines}"
+        dyn += f"\n\n## Recent voice\n{voice_lines}"
 
     if voice_mode:
-        ctx.system_prompt += (
+        dyn += (
             "\n\n## Active channel: voice\n"
             "The operator is on push-to-talk voice. STT transcribed their speech; "
             "your reply is synthesized with Piper TTS and played on the speaker. "
@@ -179,6 +182,9 @@ async def assemble_context(
         )
 
     ts = datetime.now(timezone.utc).isoformat()
-    ctx.system_prompt += f"\n\nContext assembled at {ts}"
+    dyn += f"\n\nContext assembled at {ts}"
+
+    ctx.prompt_segments = PromptSegments(stable=segs.stable, dynamic=dyn)
+    ctx.system_prompt = segs.stable + dyn
 
     return ctx

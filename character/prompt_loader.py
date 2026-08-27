@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,45 @@ _DEFAULT_IMPORTANCE = 2.0
 # override the hand-maintained base; everything else (summary, voice, …) stays
 # authoritative in capabilities.yaml.
 _GENERATED_KEYS = ("hosts", "tools", "tool_routing", "filesystem", "status")
+
+
+@dataclass
+class PromptSegments:
+    """Stable-prefix / dynamic-suffix split, modeled on elizaOS promptSegments.
+
+    ``stable`` holds the persona, identity, capabilities and rules — content that
+    changes only when the character config changes. ``dynamic`` holds
+    session-scoped context (memory, entities). Keeping the stable prefix byte
+    identical across calls lets LLM providers (Anthropic cache_control, OpenAI /
+    Gemini stable-prefix reordering) cache the expensive fixed preamble.
+    """
+
+    stable: str = ""
+    dynamic: str = ""
+
+    def to_messages(self, raw_input: str) -> list[dict]:
+        return [
+            {"role": "system", "content": self.stable + self.dynamic},
+            {"role": "user", "content": raw_input},
+        ]
+
+
+# Cache of rendered stable cores keyed by a hash of the stable inputs. Avoids
+# re-parsing/re-assembling the persona/capabilities preamble on every assembly.
+_STABLE_CACHE: dict[str, str] = {}
+
+
+def _stable_cache_key(
+    identity_facts: list[str] | None,
+    include_capabilities: bool,
+) -> str:
+    payload = hashlib.sha256()
+    if identity_facts is None:
+        payload.update(b"<auto>")
+    else:
+        payload.update(("\x1f".join(identity_facts)).encode())
+    payload.update(("\x1e" + str(include_capabilities)).encode())
+    return payload.hexdigest()
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -162,23 +203,20 @@ def _format_capabilities(cap: dict[str, Any]) -> list[str]:
     return lines
 
 
-def build_system_prompt(
-    session_memory: list[dict] | None = None,
-    recent_entities: list[str] | None = None,
-    identity_facts: list[str] | None = None,
+def _render_stable_core(
     include_capabilities: bool = False,
-) -> str:
+    identity_facts: list[str] | None = None,
+) -> list[str]:
+    """Render the stable prompt preamble (persona / capabilities / rules)."""
     persona = load_persona()
     identity = persona["identity"]
     style = persona["communication_style"]
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     cap = load_capabilities()
 
     parts = [f"You are {identity['name']}.", identity["persona"]]
     parts.append("")
     parts.append(f"You address the user as {identity['address_user_as']}.")
     parts.append(f"Communication: {style['verbosity']}, {style['tone']}.")
-    parts.append(f"Current time: {now}")
     parts.append("")
     # Voice/TTS is a real capability — small models otherwise deny it exists.
     parts.append(
@@ -227,20 +265,60 @@ def build_system_prompt(
             parts.append(f"- {fact}")
         parts.append("")
 
+    return parts
+
+
+def build_prompt_segments(
+    session_memory: list[dict] | None = None,
+    recent_entities: list[str] | None = None,
+    identity_facts: list[str] | None = None,
+    include_capabilities: bool = False,
+) -> PromptSegments:
+    """Split a system prompt into stable (cacheable) + dynamic (session) segments.
+
+    The stable prefix is cached keyed on its inputs; repeated assemblies with an
+    unchanged character config reuse the rendered preamble instead of re-parsing
+    YAML and re-assembling — the same stable-prefix idea elizaOS's promptSegments
+    exposes for provider-level prompt caching.
+    """
+    key = _stable_cache_key(identity_facts, include_capabilities)
+    stable = _STABLE_CACHE.get(key)
+    if stable is None:
+        stable = "\n".join(_render_stable_core(include_capabilities, identity_facts))
+        _STABLE_CACHE[key] = stable
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    dyn_parts: list[str] = [f"Current time: {now}", ""]
+
     if session_memory:
-        parts.append("## Session Context")
+        dyn_parts.append("## Session Context")
         for mem in session_memory[-5:]:
             summary = mem.get("summary", mem.get("raw_text", ""))
-            parts.append(f"- {summary}")
-        parts.append("")
+            dyn_parts.append(f"- {summary}")
+        dyn_parts.append("")
 
     if recent_entities:
-        parts.append("## Known Entities")
+        dyn_parts.append("## Known Entities")
         for ent in recent_entities:
-            parts.append(f"- {ent}")
-        parts.append("")
+            dyn_parts.append(f"- {ent}")
+        dyn_parts.append("")
 
-    return "\n".join(parts)
+    return PromptSegments(stable=stable, dynamic="\n".join(dyn_parts))
+
+
+def build_system_prompt(
+    session_memory: list[dict] | None = None,
+    recent_entities: list[str] | None = None,
+    identity_facts: list[str] | None = None,
+    include_capabilities: bool = False,
+) -> str:
+    segs = build_prompt_segments(
+        session_memory=session_memory,
+        recent_entities=recent_entities,
+        identity_facts=identity_facts,
+        include_capabilities=include_capabilities,
+    )
+    return segs.stable + segs.dynamic
 
 
 def get_nexi_system_prompt() -> str:

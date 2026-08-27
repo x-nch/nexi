@@ -7,6 +7,8 @@ import yaml
 
 from nexi.character import prompt_loader
 from nexi.character.prompt_loader import (
+    PromptSegments,
+    build_prompt_segments,
     build_system_prompt,
     get_identity_fact_records,
     get_identity_fact_texts,
@@ -14,6 +16,14 @@ from nexi.character.prompt_loader import (
     load_capabilities,
     load_persona,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_stable_cache():
+    from nexi.character.prompt_loader import _STABLE_CACHE
+    _STABLE_CACHE.clear()
+    yield
+    _STABLE_CACHE.clear()
 
 
 def test_load_persona():
@@ -198,3 +208,96 @@ def test_character_yamls_valid():
     facts = yaml.safe_load((base / "identity_facts.yaml").read_text())
     assert len(facts["identity_facts"]) >= 10
     assert all(f["importance"] <= 2.0 for f in facts["identity_facts"])
+
+
+def test_prompt_segments_splits_stable_and_dynamic():
+    segs = build_prompt_segments(
+        session_memory=[{"summary": "deployed foo"}],
+        recent_entities=["Gemma 4"],
+    )
+    assert isinstance(segs, PromptSegments)
+    # Stable: identity, persona, capabilities(tools path), rules
+    assert "Nexi" in segs.stable
+    assert "## Rules (never do)" in segs.stable
+    assert "## Tools" in segs.stable
+    assert "## Identity" in segs.stable
+    # Dynamic: session context and entities ONLY in dynamic
+    assert "## Session Context" in segs.dynamic
+    assert "deployed foo" in segs.dynamic
+    assert "## Known Entities" in segs.dynamic
+    assert "Gemma 4" in segs.dynamic
+    # Stable must NOT contain session-specific content
+    assert "deployed foo" not in segs.stable
+    assert "Gemma 4" not in segs.stable
+
+
+def test_prompt_segments_stable_cache_hit_no_rerender(monkeypatch):
+    renders = {"n": 0}
+
+    def _fake_render():
+        renders["n"] += 1
+        return ["Nexi", "## Capabilities", "## Rules (never do)"]
+
+    monkeypatch.setattr(
+        "nexi.character.prompt_loader._render_stable_core",
+        lambda *a, **k: _fake_render(),
+    )
+
+    build_prompt_segments(session_memory=[], recent_entities=[])
+    build_prompt_segments(session_memory=[], recent_entities=[])
+    # Same stable config -> second call served from cache, no re-render
+    assert renders["n"] == 1
+
+
+def test_prompt_segments_different_stable_invalidates_cache(monkeypatch):
+    calls: list[list] = []
+
+    def _fake_render(include_capabilities=True, identity_facts=None):
+        calls.append(identity_facts)
+        return ["Nexi", "## Capabilities"]
+
+    monkeypatch.setattr(
+        "nexi.character.prompt_loader._render_stable_core",
+        _fake_render,
+    )
+
+    build_prompt_segments(session_memory=[], recent_entities=[])
+    build_prompt_segments(session_memory=[], recent_entities=[], identity_facts=["different"])
+    assert len(calls) == 2
+
+
+def test_prompt_segments_stable_frozen_across_calls():
+    s1 = build_prompt_segments(session_memory=[{"summary": "a"}], recent_entities=["E1"]).stable
+    s2 = build_prompt_segments(session_memory=[{"summary": "b"}], recent_entities=["E2"]).stable
+    # Stable prefix is byte-identical even though session context differs
+    assert s1 == s2
+
+
+def test_prompt_segments_concat_equals_build_system_prompt(monkeypatch):
+    monkeypatch.setattr("nexi.character.prompt_loader.load_capabilities", lambda: {
+        "summary": "cap summary",
+        "hosts": {"node-a": {"role": "control-plane"}},
+        "voice": {"stt": "faster-whisper", "tts": "piper"},
+        "tools": {},
+        "tool_routing": "",
+    })
+    monkeypatch.setattr("nexi.character.prompt_loader.get_identity_fact_texts", lambda: ["fake fact"])
+    segs = build_prompt_segments(
+        session_memory=[{"summary": "s"}],
+        recent_entities=["E1"],
+        include_capabilities=True,
+    )
+    full = build_system_prompt(
+        session_memory=[{"summary": "s"}],
+        recent_entities=["E1"],
+        identity_facts=["fake fact"],
+        include_capabilities=True,
+    )
+    # The concatenation reproduces the full system prompt modulo the frozen timestamp.
+    assert segs.stable + segs.dynamic == full
+
+
+def test_prompt_segments_cache_cleared():
+    from nexi.character.prompt_loader import _STABLE_CACHE
+    build_prompt_segments()
+    assert len(_STABLE_CACHE) >= 1
