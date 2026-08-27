@@ -122,7 +122,7 @@ async def generate_options(
             resp = await client.post(
                 "/chat/completions",
                 json={
-                    "model": model_route.model_name,
+                    "model": settings.model_id,
                     "messages": [
                         {"role": "system", "content": system_msg},
                         {"role": "user", "content": user_msg},
@@ -153,7 +153,8 @@ async def generate_options(
 
         if options:
             emit_event(session.trace_id, "option_generator", "GENERATION_COMPLETE",
-                       {"options_count": len(options), "path": "MODEL"})
+                       {"options_count": len(options), "path": "MODEL",
+                        "routed_model": model_route.model_name})
             return options, GenerationPath.MODEL
     except Exception:
         pass
