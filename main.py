@@ -17,6 +17,7 @@ from .character.capability_builder import (
     render_overlay,
     write_overlay,
 )
+from .character import persona_builder
 from .character.prompt_loader import load_capabilities
 from .config import settings
 from .infra.discovery import build_snapshot, probe_services
@@ -80,6 +81,11 @@ async def _capability_refresh_loop() -> None:
         await _refresh_capabilities(force_write=True)
     except Exception as exc:
         logger.warning("Initial capability refresh failed: %s", exc)
+    try:
+        if settings.persona_auto_refresh:
+            await persona_builder.build_persona()
+    except Exception as exc:
+        logger.warning("Initial persona refresh failed: %s", exc)
 
     elapsed = 0.0
     while True:
@@ -92,6 +98,11 @@ async def _capability_refresh_loop() -> None:
             await _refresh_capabilities(force_write=force_write)
         except Exception as exc:
             logger.warning("Periodic capability refresh failed: %s", exc)
+        try:
+            if settings.persona_auto_refresh:
+                await persona_builder.build_persona()
+        except Exception as exc:
+            logger.warning("Periodic persona refresh failed: %s", exc)
 
 
 @asynccontextmanager
@@ -301,10 +312,27 @@ async def nexi_capabilities() -> dict[str, Any]:
 async def nexi_refresh() -> dict[str, Any]:
     """On-demand full refresh: topology → tools → probes → overlay write."""
     caps = await _refresh_capabilities(force_write=True)
-    return {
+    persona_result = None
+    if settings.persona_auto_refresh:
+        try:
+            persona_result = await persona_builder.build_persona()
+        except Exception as exc:
+            logger.warning("Persona refresh failed: %s", exc)
+    resp = {
         "status": "ok",
         "generated_at": caps.get("generated_at"),
         "hosts": sorted(caps.get("hosts", {})),
         "healthy": caps.get("status", {}).get("healthy", []),
         "down": caps.get("status", {}).get("down", []),
     }
+    if persona_result is not None:
+        resp["persona"] = {
+            "changed": persona_result.changed,
+            "inference_backend": persona_result.self_model.inference_backend,
+            "active_model": persona_result.self_model.active_model,
+            "mcp_servers": persona_result.self_model.mcp_servers,
+            "skills": [s["name"] for s in persona_result.self_model.skills],
+            "tool_count": persona_result.self_model.tool_count,
+            "error": persona_result.error,
+        }
+    return resp

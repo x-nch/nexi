@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from nexi.config import settings
+from nexi.character.persona_builder import SelfModel, render_persona_template
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,9 @@ _DEFAULT_IMPORTANCE = 2.0
 # override the hand-maintained base; everything else (summary, voice, …) stays
 # authoritative in capabilities.yaml.
 _GENERATED_KEYS = ("hosts", "tools", "tool_routing", "filesystem", "status")
+
+# Keys the persona generator owns (the live self-model). Merged into load_persona().
+_PERSONA_GENERATED_KEYS = ("self_model",)
 
 
 @dataclass
@@ -69,8 +73,32 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 def load_persona() -> dict[str, Any]:
-    """Identity and communication style — the stable persona signal."""
-    return _load_yaml(_PERSONA_PATH)
+    """Identity and communication style — merged with the live persona overlay."""
+    persona = _load_yaml(_PERSONA_PATH)
+    overlay = _load_generated_persona_overlay()
+    if overlay:
+        for key in _PERSONA_GENERATED_KEYS:
+            if key in overlay and overlay[key] not in (None, ""):
+                persona[key] = overlay[key]
+    return persona
+
+
+def _load_generated_persona_overlay() -> dict[str, Any] | None:
+    """Best-effort read of the auto-generated persona overlay; falls back to repo copy."""
+    candidates = [
+        Path(settings.persona_generated_path).expanduser(),
+        Path(__file__).parent / "persona.generated.yaml",
+    ]
+    for raw in candidates:
+        path = Path(raw).expanduser()
+        if not path.is_file():
+            continue
+        try:
+            return _load_yaml(path)
+        except Exception as exc:
+            logger.warning("Failed to load generated persona overlay %s: %s", path, exc)
+            return None
+    return None
 
 
 def get_generated_overlay_path() -> Path:
@@ -213,7 +241,14 @@ def _render_stable_core(
     style = persona["communication_style"]
     cap = load_capabilities()
 
-    parts = [f"You are {identity['name']}.", identity["persona"]]
+    persona_text = identity["persona"]
+    self_model = persona.get("self_model")
+    if self_model:
+        try:
+            persona_text = render_persona_template(persona_text, SelfModel(**self_model))
+        except Exception as exc:
+            logger.warning("Persona template render failed; falling back to raw: %s", exc)
+    parts = [f"You are {identity['name']}.", persona_text]
     parts.append("")
     parts.append(f"You address the user as {identity['address_user_as']}.")
     parts.append(f"Communication: {style['verbosity']}, {style['tone']}.")

@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     opencode_go_api_key: str = ""
     opencode_go_api_timeout_s: float = 60.0
     model_id: str = "deepseek-v4-pro"
+    # Dynamic model selection budget for the opencode-go backend.
+    # One of: cheap | balanced | quality.
+    model_budget: str = "balanced"
+    # Optional override of the opencode-go model catalog (list of dicts with
+    # id/cost_tier/context_window/strengths/latency_ms/description). Empty = defaults.
+    opencode_go_models: list = Field(default_factory=list)
     options_count: int = 5
 
     # Intent classification and reflection use the same hosted model
@@ -64,6 +70,10 @@ class Settings(BaseSettings):
     probe_timeout_s: float = 2.0
     xnch_tools_endpoint: str = "/nexi/tools"
     capability_auto_refresh: bool = True
+
+    # Persona self-description auto-refresh
+    persona_auto_refresh: bool = True
+    persona_generated_path: str = "~/.xnch/nexi-persona.generated.yaml"
 
     # Goal tracking driver loop
     goal_driver_enabled: bool = False

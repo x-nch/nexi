@@ -11,6 +11,7 @@ from ..config import settings
 from ..models import PlanOption, GenerationPath
 from ..models.options import ActionSpec
 from ..models.intent import IntentClass
+from .model_router import fallback_chain, select_model
 from xnch.observability.langfuse_client import trace_llm_call
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,12 @@ def _rule_based_options(intent_class: str, target_entity_id: str) -> list[PlanOp
 
 
 class ModelAdapter:
-    """Routes constrained generation through OpenCode Go API (DeepSeek V4)."""
+    """Routes constrained generation through OpenCode Go API (DeepSeek V4).
+
+    The model is selected per request by :mod:`nexi.adapters.model_router` based on
+    the intent class and a cost/quality budget, with automatic fallback across the
+    opencode-go model chain when the preferred model errors.
+    """
 
     def _api_headers(self) -> dict[str, str]:
         """Build authorization headers for OpenCode Go API."""
@@ -107,17 +113,27 @@ class ModelAdapter:
         prompt_payload = self._build_prompt(
             intent_class, target_entity_id, target_entity_class, context_summary, n
         )
+        budget = getattr(settings, "model_budget", "balanced")
 
-        try:
-            options = await self._call_opencode_go(
-                prompt_payload, intent_class, target_entity_id, settings.model_id
-            )
-            if options:
-                return options, GenerationPath.MODEL
-        except Exception as exc:
-            logger.warning("OpenCode Go API call failed: %s", exc)
-
+        # Try each model in the per-intent fallback chain before giving up.
+        for model_name in fallback_chain(intent_class):
+            try:
+                options = await self._call_opencode_go(
+                    prompt_payload, intent_class, target_entity_id, model_name
+                )
+                if options:
+                    return options, GenerationPath.MODEL
+            except Exception as exc:
+                logger.warning("OpenCode Go model %s failed: %s", model_name, exc)
+        logger.warning(
+            "All opencode-go models failed for intent %s — falling back to rule-based",
+            intent_class,
+        )
         return _rule_based_options(intent_class, target_entity_id), GenerationPath.RULE_BASED
+
+    def select_model(self, intent_class: str) -> str:
+        """Expose the preferred model id for an intent (used by callers/tests)."""
+        return select_model(intent_class, getattr(settings, "model_budget", "balanced")).id
 
     def _build_prompt(
         self,
