@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import time
 import uuid
 from typing import Any
@@ -11,7 +12,8 @@ from ..models import PlanOption, GenerationPath
 from ..models.options import ActionSpec
 from ..models.intent import IntentClass
 from xnch.observability.langfuse_client import trace_llm_call
-from xnch.routing.classifier import classify_request
+
+logger = logging.getLogger(__name__)
 
 
 _RULE_BASED_TEMPLATES: dict[str, list[dict]] = {
@@ -85,7 +87,14 @@ def _rule_based_options(intent_class: str, target_entity_id: str) -> list[PlanOp
 
 
 class ModelAdapter:
-    """Routes constrained generation through LiteLLM proxy with fallback chain."""
+    """Routes constrained generation through OpenCode Go API (DeepSeek V4)."""
+
+    def _api_headers(self) -> dict[str, str]:
+        """Build authorization headers for OpenCode Go API."""
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if settings.opencode_go_api_key:
+            headers["Authorization"] = f"Bearer {settings.opencode_go_api_key}"
+        return headers
 
     async def generate_options(
         self,
@@ -99,31 +108,14 @@ class ModelAdapter:
             intent_class, target_entity_id, target_entity_class, context_summary, n
         )
 
-        model_route = classify_request(
-            raw_input=prompt_payload.get("intent", {}).get("entity_id", ""),
-            actor_role="AGENT",
-            metadata={"intent_class": intent_class, "complexity_score": 0.5},
-        )
-
-        for attempt, (url, timeout) in enumerate([
-            (settings.litellm_proxy_url, settings.litellm_proxy_timeout_s),
-            (settings.vllm_primary_url, settings.vllm_primary_timeout_s),
-        ]):
-            if not url:
-                continue
-            try:
-                options = await self._call_litellm(url, timeout, prompt_payload, intent_class, target_entity_id, model_route.model_name)
-                if options:
-                    return options, GenerationPath.MODEL
-            except Exception:
-                pass
-
         try:
-            options = await self._call_llama_cpp(prompt_payload, intent_class, target_entity_id)
+            options = await self._call_opencode_go(
+                prompt_payload, intent_class, target_entity_id, settings.model_id
+            )
             if options:
                 return options, GenerationPath.MODEL
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("OpenCode Go API call failed: %s", exc)
 
         return _rule_based_options(intent_class, target_entity_id), GenerationPath.RULE_BASED
 
@@ -160,6 +152,50 @@ class ModelAdapter:
             "instruction": "Generate only. Do not evaluate. Do not select.",
         }
 
+    async def _call_opencode_go(
+        self,
+        prompt_payload: dict,
+        intent_class: str,
+        target_entity_id: str,
+        model_name: str,
+    ) -> list[PlanOption]:
+        """Call OpenCode Go API (DeepSeek V4) for option generation."""
+        if not settings.opencode_go_api_key:
+            logger.warning("OpenCode Go API key unset — failing closed to rule-based options")
+            return []
+        prompt_text = json.dumps(prompt_payload)
+        t0 = time.time()
+        async with httpx.AsyncClient(
+            base_url=settings.opencode_go_api_url,
+            timeout=settings.opencode_go_api_timeout_s,
+            headers=self._api_headers(),
+        ) as client:
+            resp = await client.post(
+                "/chat/completions",
+                json={
+                    "model": model_name,
+                    "messages": [
+                        {"role": "system", "content": "You are an option generator. Return valid JSON only."},
+                        {"role": "user", "content": prompt_text},
+                    ],
+                    "response_format": {"type": "json_object"},
+                },
+            )
+            resp.raise_for_status()
+            raw_options = resp.json()["choices"][0]["message"]["content"]
+            latency_ms = int((time.time() - t0) * 1000)
+            tokens_used = resp.json().get("usage", {}).get("total_tokens", 0)
+            await trace_llm_call(
+                prompt=prompt_text,
+                response=raw_options,
+                model=model_name,
+                latency_ms=latency_ms,
+                tokens_used=tokens_used,
+            )
+            return self._parse_options(raw_options, target_entity_id)
+
+    # Legacy fallback methods (kept for emergency rollback — disabled by default)
+
     async def _call_litellm(
         self,
         base_url: str,
@@ -169,6 +205,7 @@ class ModelAdapter:
         target_entity_id: str,
         model_name: str,
     ) -> list[PlanOption]:
+        """Legacy: LiteLLM proxy fallback. Only called if vllm_primary_url is set."""
         prompt_text = json.dumps(prompt_payload)
         t0 = time.time()
         _headers = {"Authorization": f"Bearer {settings.litellm_api_key}"} if settings.litellm_api_key else {}
@@ -187,43 +224,11 @@ class ModelAdapter:
             resp.raise_for_status()
             raw_options = resp.json()["choices"][0]["message"]["content"]
             latency_ms = int((time.time() - t0) * 1000)
-            tokens_used = resp.json()["usage"]["total_tokens"]
+            tokens_used = resp.json().get("usage", {}).get("total_tokens", 0)
             await trace_llm_call(
                 prompt=prompt_text,
                 response=raw_options,
                 model=model_name,
-                latency_ms=latency_ms,
-                tokens_used=tokens_used,
-            )
-            return self._parse_options(raw_options, target_entity_id)
-
-    async def _call_llama_cpp(
-        self,
-        prompt_payload: dict,
-        intent_class: str,
-        target_entity_id: str,
-    ) -> list[PlanOption]:
-        prompt_text = json.dumps(prompt_payload)
-        t0 = time.time()
-        async with httpx.AsyncClient(base_url="http://localhost:8080", timeout=60.0) as client:
-            resp = await client.post(
-                "/v1/chat/completions",
-                json={
-                    "messages": [
-                        {"role": "system", "content": "You are an option generator. Return valid JSON only."},
-                        {"role": "user", "content": prompt_text},
-                    ],
-                    "grammar": None,
-                },
-            )
-            resp.raise_for_status()
-            raw_options = resp.json()["choices"][0]["message"]["content"]
-            latency_ms = int((time.time() - t0) * 1000)
-            tokens_used = resp.json()["usage"]["total_tokens"]
-            await trace_llm_call(
-                prompt=prompt_text,
-                response=raw_options,
-                model="llama-cpp",
                 latency_ms=latency_ms,
                 tokens_used=tokens_used,
             )

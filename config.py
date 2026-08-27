@@ -15,21 +15,26 @@ class Settings(BaseSettings):
     xnch_base_url: str = "http://localhost:8001"
     xnch_public_key_path: str = "~/.xnch/keys/public.pem"
 
-    # Model adapter
-    vllm_primary_url: str = "http://192.168.50.2:8082/v1"
+    # OpenCode Go API (hosted DeepSeek V4)
+    opencode_go_api_url: str = "https://opencode.ai/zen/go/v1"
+    opencode_go_api_key: str = ""
+    opencode_go_api_timeout_s: float = 60.0
+    model_id: str = "deepseek-v4-pro"
+    options_count: int = 5
+
+    # Intent classification and reflection use the same hosted model
+    intent_classifier_model: str = "deepseek-v4-pro"
+    reflection_model: str = "deepseek-v4-pro"
+    reflection_enabled: bool = True
+
+    # Legacy: local vLLM / LiteLLM fallback (kept for rollback; unused by default)
+    vllm_primary_url: str = ""
     vllm_primary_timeout_s: float = 30.0
     vllm_secondary_url: str = ""
     vllm_secondary_timeout_s: float = 45.0
-    model_id: str = "ornith-1.0-35b"
-    options_count: int = 5
-
-    # LiteLLM proxy
-    litellm_proxy_url: str = "http://localhost:4000/v1"
+    litellm_proxy_url: str = ""
     litellm_proxy_timeout_s: float = 60.0
     litellm_api_key: str = ""
-    intent_classifier_model: str = "ornith"
-    reflection_model: str = "ornith"
-    reflection_enabled: bool = True
 
     # Session
     session_ttl_s: int = 120

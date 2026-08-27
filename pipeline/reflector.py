@@ -133,12 +133,12 @@ async def _default_llm_fn(
             "context_summary": context_summary,
         })
     )
+    _headers = {"Content-Type": "application/json"}
+    if settings.opencode_go_api_key:
+        _headers["Authorization"] = f"Bearer {settings.opencode_go_api_key}"
     async with httpx.AsyncClient(
-        base_url=settings.litellm_proxy_url, timeout=settings.litellm_proxy_timeout_s
+        base_url=settings.opencode_go_api_url, timeout=settings.opencode_go_api_timeout_s
     ) as client:
-        headers = {}
-        if settings.litellm_api_key:
-            headers["Authorization"] = f"Bearer {settings.litellm_api_key}"
         resp = await client.post(
             "/chat/completions",
             json={
@@ -151,7 +151,7 @@ async def _default_llm_fn(
                 "temperature": 0.2,
                 "max_tokens": 400,
             },
-            headers=headers,
+            headers=_headers,
         )
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
