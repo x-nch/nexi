@@ -54,6 +54,35 @@ class PromptSegments:
 _STABLE_CACHE: dict[str, str] = {}
 
 
+def _config_fingerprint() -> str:
+    """Hash of the persona/capabilities inputs so the stable core is rebuilt
+    when any of them changes (including a regenerated overlay).
+
+    The rendered stable prefix depends on persona.yaml + capabilities.yaml merged
+    with their auto-generated overlays. The overlay files change on every persona
+    refresh, so their content must be part of the cache key — otherwise a
+    long-lived process keeps serving a stale persona after a refresh (bug: the
+    key previously ignored the overlays entirely).
+    """
+    wanted = [
+        _PERSONA_PATH,
+        Path(__file__).parent / "capabilities.yaml",
+        Path(settings.persona_generated_path).expanduser(),
+        get_generated_overlay_path(),
+    ]
+    h = hashlib.sha256()
+    for path in wanted:
+        h.update(b"\x00")
+        h.update(path.as_posix().encode())
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        h.update(str(st.st_size).encode())
+        h.update(str(st.st_mtime_ns).encode())
+    return h.hexdigest()
+
+
 def _stable_cache_key(
     identity_facts: list[str] | None,
     include_capabilities: bool,
@@ -64,6 +93,7 @@ def _stable_cache_key(
     else:
         payload.update(("\x1f".join(identity_facts)).encode())
     payload.update(("\x1e" + str(include_capabilities)).encode())
+    payload.update(("\x1f" + _config_fingerprint()).encode())
     return payload.hexdigest()
 
 

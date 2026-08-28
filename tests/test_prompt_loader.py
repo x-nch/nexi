@@ -367,3 +367,51 @@ def test_load_persona_bad_overlay_falls_back(monkeypatch, tmp_path):
     )
     persona = load_persona()
     assert "self_model" not in persona
+
+
+def test_stable_cache_key_invalidates_on_overlay_regen(monkeypatch, tmp_path):
+    # The stable-core cache key must change when the generated persona overlay is
+    # (re)written, so a long-lived process serves the fresh persona, not a stale
+    # cached preamble (regression: the key previously ignored the overlays).
+    from nexi.character.prompt_loader import _stable_cache_key
+
+    persona_overlay = tmp_path / "persona.generated.yaml"
+    caps_overlay = tmp_path / "caps.generated.yaml"
+    persona_overlay.write_text("self_model: {active_model: old-model}\n")
+    caps_overlay.write_text("hosts: {node-a: {role: control-plane}}\n")
+    monkeypatch.setattr(
+        "nexi.character.prompt_loader.settings.persona_generated_path", str(persona_overlay)
+    )
+    monkeypatch.setattr(
+        "nexi.character.prompt_loader.settings.capabilities_generated_path", str(caps_overlay)
+    )
+
+    key_before = _stable_cache_key(None, True)
+
+    # Simulate a persona refresh rewriting the overlay with different content.
+    import os
+    import time
+
+    time.sleep(0.011)
+    persona_overlay.write_text("self_model: {active_model: new-model}\n")
+    os.utime(persona_overlay, None)
+
+    key_after = _stable_cache_key(None, True)
+    assert key_after != key_before
+
+
+def test_stable_cache_key_stable_when_overlays_unchanged(monkeypatch, tmp_path):
+    from nexi.character.prompt_loader import _stable_cache_key
+
+    persona_overlay = tmp_path / "persona.generated.yaml"
+    caps_overlay = tmp_path / "caps.generated.yaml"
+    persona_overlay.write_text("self_model: {active_model: model-x}\n")
+    caps_overlay.write_text("hosts: {node-a: {role: control-plane}}\n")
+    monkeypatch.setattr(
+        "nexi.character.prompt_loader.settings.persona_generated_path", str(persona_overlay)
+    )
+    monkeypatch.setattr(
+        "nexi.character.prompt_loader.settings.capabilities_generated_path", str(caps_overlay)
+    )
+
+    assert _stable_cache_key(None, True) == _stable_cache_key(None, True)
