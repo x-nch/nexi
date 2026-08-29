@@ -242,3 +242,10 @@ Parent documentation (paths relative to this README; separate repositories, refe
 - `../docs/architecture/topology.md` — node layout and service inventory
 - `../infra/README.md` and `../infra/no-k3s/node-b/systemd/` — units and startup scripts
 - `../docs/runbooks/restart-node-b.md` — restart procedure
+
+## APEX-UI
+
+This engine serves as the local `llm-ornith` decision core behind APEX-UI. No code
+changes are required for the APEX-UI adoption — the 18 business agents run as
+opencode→OpenRouter agents via `xnch` (see x-nch/xnch#9); nexi remains the local
+reasoning engine driving the orb's state.
