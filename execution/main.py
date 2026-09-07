@@ -112,6 +112,17 @@ async def execute(req: ExecuteRequest):
 
 async def _execute_action(action_type: str, target: str, params: dict, workspace: Path) -> dict:
     """Dispatch to action-specific handler."""
+    # Handle EXEC_TOOL by delegating to target-specific handler
+    if action_type == "EXEC_TOOL":
+        target_handlers = {
+            "web_search": _exec_web_search,
+            "agent_dispatch": _exec_agent_dispatch,
+        }
+        handler = target_handlers.get(target)
+        if not handler:
+            raise ValueError(f"unknown exec_tool target: {target}")
+        return await handler(target, params, workspace)
+
     handlers = {
         "WRITE_FILE": _exec_write_file,
         "READ_FILE": _exec_read_file,
