@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     # xnch
     xnch_base_url: str = "http://localhost:8001"
+    xnch_service_key: str = ""
     xnch_public_key_path: str = "~/.xnch/keys/public.pem"
 
     # Provider routing — which backend serves a request.

@@ -19,9 +19,11 @@ from ..utils.audit import emit_event
 
 class XnchClient:
     def __init__(self) -> None:
+        headers = {"X-Service-Key": settings.xnch_service_key} if settings.xnch_service_key else {}
         self._http = httpx.AsyncClient(
             base_url=settings.xnch_base_url,
             timeout=10.0,
+            headers=headers,
         )
 
     async def aclose(self) -> None:
