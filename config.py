@@ -70,6 +70,7 @@ class Settings(BaseSettings):
         self.litellm_proxy_url = os.environ.get("NEXI_LITELLM_PROXY_URL", self.litellm_proxy_url)
         self.litellm_api_key = os.environ.get("NEXI_LITELLM_API_KEY", self.litellm_api_key)
         self.nexi_default_resolves_to = os.environ.get("NEXI_NEXI_DEFAULT_RESOLVES_TO", self.nexi_default_resolves_to)
+        self.xnch_base_url = os.environ.get("NEXI_XNCH_BASE_URL", self.xnch_base_url)
 
     # Legacy: local vLLM (kept for rollback + persona probing)
     vllm_primary_url: str = ""
