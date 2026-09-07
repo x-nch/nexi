@@ -43,13 +43,20 @@ async def run_pipeline_pass(
     raw_input: str,
     simulation: dict[str, Any] | None = None,
     goal_id: UUID | None = None,
+    model_provider: str | None = None,
+    model_id: str | None = None,
 ) -> PipelinePassResult:
-    """Run one full decision pipeline pass (interpret → dispatch)."""
+    """Run one full decision pipeline pass (interpret → dispatch).
+
+    ``model_provider``/``model_id`` optionally force the LLM backend used for
+    model-driven stages (option generation and model-gated intent/reflection
+    fall through the router; when set, these pin the provider/model)."""
     # Step 3 — Intent interpretation
     try:
         async with stage_timer("interpret"):
             intent = await intent_interpreter.interpret(
-                raw_input, session.session_id, str(session.trace_id)
+                raw_input, session.session_id, str(session.trace_id),
+                provider=model_provider, model_id=model_id,
             )
     except ClarificationRequired:
         record_pass_outcome("CLARIFICATION_REQUIRED")
@@ -76,7 +83,8 @@ async def run_pipeline_pass(
     # Step 5 — Option generation
     async with stage_timer("generate_options"):
         raw_options, generation_path = await generate_options(
-            model_adapter, session, intent, manifest, settings.options_count
+            model_adapter, session, intent, manifest, settings.options_count,
+            provider=model_provider, model_id=model_id,
         )
 
     # Step 6 — Policy alignment filter

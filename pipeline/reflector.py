@@ -9,7 +9,6 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import httpx
 from pydantic import BaseModel
 
 from ..adapters.xnch_client import XnchClient
@@ -123,7 +122,9 @@ async def _default_llm_fn(
     prediction_delta: float,
     context_summary: dict[str, Any],
 ) -> dict[str, Any]:
-    """Reflection via LiteLLM proxy; returns parsed JSON dict."""
+    """Reflection via the nexi model router; returns parsed JSON dict."""
+    from ..adapters.llm import chat_completion, extract_content
+
     user_prompt = (
         "Based on the following outcome data, generate a reflection JSON.\n"
         "Return exactly: {\"verdict\": \"...\", \"lesson\": \"...\", \"insight\": \"...\", \"applicability\": \"...\"}\n\n"
@@ -133,30 +134,28 @@ async def _default_llm_fn(
             "context_summary": context_summary,
         })
     )
-    _headers = {"Content-Type": "application/json"}
-    if settings.opencode_go_api_key:
-        _headers["Authorization"] = f"Bearer {settings.opencode_go_api_key}"
-    async with httpx.AsyncClient(
-        base_url=settings.opencode_go_api_url, timeout=settings.opencode_go_api_timeout_s
-    ) as client:
-        resp = await client.post(
-            "/chat/completions",
-            json={
-                "model": settings.reflection_model,
-                "messages": [
-                    {"role": "system", "content": _REFLECTION_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "response_format": {"type": "json_object"},
-                "temperature": 0.2,
-                "max_tokens": 400,
-            },
-            headers=_headers,
+    # Reflection is an internal stage → Nexi decides the model by default;
+    # a deployment can pin it explicitly via settings.reflection_model.
+    reflection_model = settings.reflection_model
+    is_default_alias = reflection_model in ("nexi-default", "", None)
+    try:
+        body, _ = await chat_completion(
+            [
+                {"role": "system", "content": _REFLECTION_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            intent_class="DECISION",
+            model_id=None if is_default_alias else reflection_model,
+            json_mode=True,
+            temperature=0.2,
+            max_tokens=600,
         )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
+        content = extract_content(body)
         parsed = json.loads(content) if isinstance(content, str) else content
         return parsed if isinstance(parsed, dict) else {}
+    except Exception as exc:
+        logger.warning("Reflection LLM call failed: %s", exc)
+        return {}
 
 
 def build_reflector(xnch: XnchClient) -> Reflector:

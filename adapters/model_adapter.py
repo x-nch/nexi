@@ -1,17 +1,14 @@
 import hashlib
 import json
 import logging
-import time
 import uuid
 from typing import Any
-
-import httpx
 
 from ..config import settings
 from ..models import PlanOption, GenerationPath
 from ..models.options import ActionSpec
 from ..models.intent import IntentClass
-from .model_router import fallback_chain, select_model
+from .model_router import _resolve_provider, fallback_chain
 from xnch.observability.langfuse_client import trace_llm_call
 
 logger = logging.getLogger(__name__)
@@ -88,19 +85,17 @@ def _rule_based_options(intent_class: str, target_entity_id: str) -> list[PlanOp
 
 
 class ModelAdapter:
-    """Routes constrained generation through OpenCode Go API (DeepSeek V4).
+    """Routes constrained generation through nexu's multi-provider router.
 
-    The model is selected per request by :mod:`nexi.adapters.model_router` based on
-    the intent class and a cost/quality budget, with automatic fallback across the
-    opencode-go model chain when the preferred model errors.
+    The model + provider are selected per request by
+    :mod:`nexi.adapters.model_router` based on the intent class and a
+    cost/quality budget, with automatic fallback across the provider's
+    model chain when the preferred model errors.
     """
 
-    def _api_headers(self) -> dict[str, str]:
-        """Build authorization headers for OpenCode Go API."""
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if settings.opencode_go_api_key:
-            headers["Authorization"] = f"Bearer {settings.opencode_go_api_key}"
-        return headers
+    def _api_base(self) -> str:
+        """Return the base URL of the default LLM backend (for diagnostics)."""
+        return settings.opencode_go_api_url
 
     async def generate_options(
         self,
@@ -109,31 +104,38 @@ class ModelAdapter:
         target_entity_class: str,
         context_summary: dict[str, Any],
         n: int = 5,
+        *,
+        provider: str | None = None,
+        model_id: str | None = None,
     ) -> tuple[list[PlanOption], GenerationPath]:
         prompt_payload = self._build_prompt(
             intent_class, target_entity_id, target_entity_class, context_summary, n
         )
-        budget = getattr(settings, "model_budget", "balanced")
+        provider = provider or _resolve_provider(settings.default_provider)
 
-        # Try each model in the per-intent fallback chain before giving up.
-        for model_name in fallback_chain(intent_class):
+        # If an explicit model_id is requested, use it (no chain fallback needed).
+        chain = [model_id] if model_id else fallback_chain(intent_class, provider=provider)
+        for model_name in chain:
             try:
-                options = await self._call_opencode_go(
-                    prompt_payload, intent_class, target_entity_id, model_name
+                options = await self._call_llm(
+                    prompt_payload, intent_class, target_entity_id, model_name,
+                    provider=provider,
                 )
                 if options:
                     return options, GenerationPath.MODEL
             except Exception as exc:
-                logger.warning("OpenCode Go model %s failed: %s", model_name, exc)
+                logger.warning("Provider %s model %s failed: %s", provider, model_name, exc)
         logger.warning(
-            "All opencode-go models failed for intent %s — falling back to rule-based",
-            intent_class,
+            "All models failed for intent %s on %s — falling back to rule-based",
+            intent_class, provider,
         )
         return _rule_based_options(intent_class, target_entity_id), GenerationPath.RULE_BASED
 
     def select_model(self, intent_class: str) -> str:
         """Expose the preferred model id for an intent (used by callers/tests)."""
-        return select_model(intent_class, getattr(settings, "model_budget", "balanced")).id
+        from .model_router import select_model as _select
+
+        return _select(intent_class, getattr(settings, "model_budget", "balanced")).id
 
     def _build_prompt(
         self,
@@ -168,47 +170,39 @@ class ModelAdapter:
             "instruction": "Generate only. Do not evaluate. Do not select.",
         }
 
-    async def _call_opencode_go(
+    async def _call_llm(
         self,
         prompt_payload: dict,
         intent_class: str,
         target_entity_id: str,
         model_name: str,
+        *,
+        provider: str,
     ) -> list[PlanOption]:
-        """Call OpenCode Go API (DeepSeek V4) for option generation."""
-        if not settings.opencode_go_api_key:
+        """Call the resolved provider's chat-completions endpoint via the shared client."""
+        from ..adapters.llm import chat_completion, extract_content
+
+        provider = provider or _resolve_provider(settings.default_provider)
+        if provider == "openrouter" and not settings.openrouter_api_key:
+            logger.warning("OpenRouter API key unset — failing closed to rule-based options")
+            return []
+        if provider == "opencode" and not settings.opencode_go_api_key:
             logger.warning("OpenCode Go API key unset — failing closed to rule-based options")
             return []
         prompt_text = json.dumps(prompt_payload)
-        t0 = time.time()
-        async with httpx.AsyncClient(
-            base_url=settings.opencode_go_api_url,
-            timeout=settings.opencode_go_api_timeout_s,
-            headers=self._api_headers(),
-        ) as client:
-            resp = await client.post(
-                "/chat/completions",
-                json={
-                    "model": model_name,
-                    "messages": [
-                        {"role": "system", "content": "You are an option generator. Return valid JSON only."},
-                        {"role": "user", "content": prompt_text},
-                    ],
-                    "response_format": {"type": "json_object"},
-                },
-            )
-            resp.raise_for_status()
-            raw_options = resp.json()["choices"][0]["message"]["content"]
-            latency_ms = int((time.time() - t0) * 1000)
-            tokens_used = resp.json().get("usage", {}).get("total_tokens", 0)
-            await trace_llm_call(
-                prompt=prompt_text,
-                response=raw_options,
-                model=model_name,
-                latency_ms=latency_ms,
-                tokens_used=tokens_used,
-            )
-            return self._parse_options(raw_options, target_entity_id)
+        body, _ = await chat_completion(
+            [
+                {"role": "system", "content": "You are an option generator. Return valid JSON only."},
+                {"role": "user", "content": prompt_text},
+            ],
+            intent_class=intent_class,
+            provider=provider,
+            model_id=model_name,
+            json_mode=True,
+            temperature=0.4,
+            max_tokens=1500,
+        )
+        return self._parse_options(extract_content(body), target_entity_id)
 
     # Legacy fallback methods (kept for emergency rollback — disabled by default)
 
@@ -222,6 +216,10 @@ class ModelAdapter:
         model_name: str,
     ) -> list[PlanOption]:
         """Legacy: LiteLLM proxy fallback. Only called if vllm_primary_url is set."""
+        import time
+
+        import httpx
+
         prompt_text = json.dumps(prompt_payload)
         t0 = time.time()
         _headers = {"Authorization": f"Bearer {settings.litellm_api_key}"} if settings.litellm_api_key else {}

@@ -214,13 +214,21 @@ async def introspect_backend(
     http_client: httpx.AsyncClient | None = None,
 ) -> tuple[str, str, dict[str, bool]]:
     """Determine the live inference backend from config + health probes."""
-    if settings.opencode_go_api_url:
+    if settings.opencode_go_api_url and settings.nexi_default_resolves_to != "openrouter":
         backend = f"opencode-go (hosted {settings.model_id})"
+        model = settings.model_id
+    elif settings.openrouter_api_url and settings.openrouter_api_key:
+        backend = f"openrouter (default {settings.openrouter_default_model})"
+        model = f"{settings.default_provider} -> {settings.nexi_default_resolves_to}"
+    elif settings.opencode_go_api_url:
+        backend = f"opencode-go (hosted {settings.model_id})"
+        model = settings.model_id
     elif settings.vllm_primary_url:
         backend = f"vLLM local ({settings.model_id})"
+        model = settings.model_id
     else:
         backend = settings.model_id or "unknown"
-    model = settings.model_id
+        model = settings.model_id
 
     health: dict[str, bool] = {}
 

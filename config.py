@@ -15,22 +15,41 @@ class Settings(BaseSettings):
     xnch_base_url: str = "http://localhost:8001"
     xnch_public_key_path: str = "~/.xnch/keys/public.pem"
 
+    # Provider routing — which backend serves a request.
+    #   "opencode"    → OpenCode Go (hosted DeepSeek V4) via OPENCODE_GO_API_URL
+    #   "openrouter"  → OpenRouter (any model) via NEXI_OPENROUTER_API_URL
+    #   "nexi-default"→ alias resolved to `default_provider` at call time.
+    # Nexi is the default brains: chat + internals (intent, options, reflection,
+    # evaluator) route through nexi's model_router, which picks the provider.
+    default_provider: str = "nexi-default"
+    # The provider nexi-default resolves to (opencode | openrouter).
+    nexi_default_resolves_to: str = "openrouter"
+    # Dynamic model selection budget. One of: cheap | balanced | quality.
+    model_budget: str = "balanced"
+    options_count: int = 5
+
     # OpenCode Go API (hosted DeepSeek V4)
     opencode_go_api_url: str = "https://opencode.ai/zen/go/v1"
     opencode_go_api_key: str = ""
     opencode_go_api_timeout_s: float = 60.0
     model_id: str = "deepseek-v4-pro"
-    # Dynamic model selection budget for the opencode-go backend.
-    # One of: cheap | balanced | quality.
-    model_budget: str = "balanced"
     # Optional override of the opencode-go model catalog (list of dicts with
     # id/cost_tier/context_window/strengths/latency_ms/description). Empty = defaults.
     opencode_go_models: list = Field(default_factory=list)
-    options_count: int = 5
 
-    # Intent classification and reflection use the same hosted model
-    intent_classifier_model: str = "deepseek-v4-pro"
-    reflection_model: str = "deepseek-v4-pro"
+    # OpenRouter API (agentic + internet-facing inference)
+    openrouter_api_url: str = "https://openrouter.ai/api/v1"
+    openrouter_api_key: str = ""
+    openrouter_api_timeout_s: float = 90.0
+    openrouter_default_model: str = "anthropic/claude-sonnet-4"
+    # Optional override of the openrouter model catalog (list of dicts with
+    # id/cost_tier/context_window/strengths/latency_ms/description).
+    openrouter_models: list = Field(default_factory=list)
+
+    # Intent classification and reflection models (default to the router, so
+    # "nexi-default" delegates to the default provider's router selection).
+    intent_classifier_model: str = "nexi-default"
+    reflection_model: str = "nexi-default"
     reflection_enabled: bool = True
 
     # Legacy: local vLLM / LiteLLM fallback (kept for rollback; unused by default)

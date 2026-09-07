@@ -172,7 +172,15 @@ def _persist_intent(raw_input: str, intent: Intent) -> None:
 class IntentInterpreter:
     """Contract 4 two-stage classifier: rule-based pre-filter + LiteLLM fallback."""
 
-    async def interpret(self, raw_input: str, session_id: UUID, trace_id: str) -> Intent:
+    async def interpret(
+        self,
+        raw_input: str,
+        session_id: UUID,
+        trace_id: str,
+        *,
+        provider: str | None = None,
+        model_id: str | None = None,
+    ) -> Intent:
         raw_input_hash = "sha256:" + hashlib.sha256(raw_input.encode()).hexdigest()
 
         injection_result = scan_input(raw_input)
@@ -222,7 +230,10 @@ class IntentInterpreter:
             return recalled
 
         try:
-            intent = await self._classify_with_llm(raw_input, session_id, trace_id, raw_input_hash)
+            intent = await self._classify_with_llm(
+                raw_input, session_id, trace_id, raw_input_hash,
+                provider=provider, model_id=model_id,
+            )
             _persist_intent(raw_input, intent)
             return intent
         except ClarificationRequired:
@@ -251,32 +262,54 @@ class IntentInterpreter:
         session_id: UUID,
         trace_id: str,
         raw_input_hash: str,
+        *,
+        provider: str | None = None,
+        model_id: str | None = None,
     ) -> Intent:
         emit_event(trace_id, "intent_interpreter", "LLM_CLASSIFY_START")
 
-        _headers = {"Content-Type": "application/json"}
-        if settings.opencode_go_api_key:
-            _headers["Authorization"] = f"Bearer {settings.opencode_go_api_key}"
-        async with httpx.AsyncClient(
-            base_url=settings.opencode_go_api_url, timeout=settings.opencode_go_api_timeout_s,
-            headers=_headers,
-        ) as client:
-            resp = await client.post(
-                "/chat/completions",
-                json={
-                    "model": settings.intent_classifier_model,
-                    "messages": [
+        from ..adapters.llm import chat_completion
+        from ..adapters.model_router import _resolve_provider, fallback_chain
+
+        # Intent classification is an internal stage → Nexi decides the model.
+        # A step-level override (provider/model_id) takes precedence; otherwise an
+        # explicit settings.intent_classifier_model is honored; otherwise the
+        # router picks the model for the default provider.
+        effective_model = model_id or settings.intent_classifier_model
+        is_default_alias = effective_model in ("nexi-default", "", None) and not model_id
+
+        # One attempt with the resolved target; if it transiently fails but a
+        # fallback chain exists, try the next model in the chain before giving up.
+        parsed: dict[str, Any] | None = None
+        attempts = fallback_chain("QUERY") if is_default_alias else [effective_model]
+        resolved_provider = provider or _resolve_provider(settings.default_provider)
+
+        last_error: Exception | None = None
+        for attempt_model in attempts:
+            try:
+                body, _ = await chat_completion(
+                    [
                         {"role": "system", "content": _CLASSIFICATION_SYSTEM_PROMPT},
                         {"role": "user", "content": raw_input},
                     ],
-                    "response_format": {"type": "json_object"},
-                },
-            )
-            resp.raise_for_status()
-            body = resp.json()
-            content = body["choices"][0]["message"]["content"]
-
-        parsed = json.loads(content)
+                    intent_class="QUERY",
+                    provider=resolved_provider,
+                    model_id=None if is_default_alias or provider else attempt_model,
+                    json_mode=True,
+                    temperature=0.1,
+                    max_tokens=600,
+                )
+                content = body["choices"][0]["message"]["content"]
+                possible = json.loads(content)
+                if isinstance(possible, dict):
+                    parsed = possible
+                    break
+                raise ValueError("classifier returned non-object JSON")
+            except Exception as exc:
+                last_error = exc
+                logger.warning("Intent classifier attempt %s failed: %s", attempt_model, exc)
+        if parsed is None:
+            raise last_error or RuntimeError("intent classifier produced no output")
         emit_event(trace_id, "intent_interpreter", "LLM_CLASSIFY_DONE",
                    {"llm_output": parsed})
 

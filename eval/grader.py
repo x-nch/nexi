@@ -82,14 +82,21 @@ async def llm_judge(
     """Optional LLM-judge against case.judge_rubric. Returns (pass, notes)."""
     if not case.judge_rubric:
         return True, "no rubric"
-    url = (litellm_url or "http://litellm:4000").rstrip("/") + "/chat/completions"
-    model_id = model or settings.model_id
-    try:
-        from xnch.config import settings as xnch_settings
+    if litellm_url:
+        # Explicit endpoint wins (eval harness may pin to a local proxy).
+        url = litellm_url.rstrip("/") + "/chat/completions"
+        model_id = model or settings.model_id
+    else:
+        # Nexi is the default brains: route the judge through the model router.
+        from ..adapters.model_router import resolve
 
-        url = (litellm_url or xnch_settings.litellm_proxy_url).rstrip("/") + "/chat/completions"
-    except Exception:
-        pass
+        target = resolve(
+            "DECISION",
+            budget=settings.model_budget,
+            model_id=model,
+        )
+        url = target.base_url.rstrip("/") + "/chat/completions"
+        model_id = target.model_id
 
     prompt = (
         f"Rubric:\n{case.judge_rubric}\n\n"

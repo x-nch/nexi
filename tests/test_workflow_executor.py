@@ -202,3 +202,39 @@ async def test_default_execute_uses_pipeline_pass(monkeypatch):
 
     assert called["raw_input"].startswith("[workflow]")
     assert called["session"].system_state_version == "v9"
+    assert called["model_provider"] is None
+    assert called["model_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_default_execute_threads_step_model_override(monkeypatch):
+    """A step payload model_provider/model_id flows into run_pipeline_pass."""
+    from nexi.workflow import executor as ex
+
+    called = {}
+
+    class FakeResult:
+        status = "EXECUTING"
+
+    async def fake_run_pipeline_pass(**kwargs):
+        called.update(kwargs)
+        return FakeResult()
+
+    monkeypatch.setattr(
+        "nexi.pipeline.run.run_pipeline_pass", fake_run_pipeline_pass
+    )
+
+    xnch = MagicMock()
+    xnch.get_system_state = AsyncMock(
+        return_value={"system_state_version": "v1", "policy_version": "p1"}
+    )
+    step = _step_dict(payload={"model_provider": "openrouter", "model_id": "openai/gpt-4o"})
+
+    async def fake_session_factory(xnch_arg):
+        return {"system_state_version": "v9", "policy_version": "p9"}
+
+    await ex._default_execute_step(step, xnch=xnch, session_factory=fake_session_factory)
+
+    assert called["model_provider"] == "openrouter"
+    assert called["model_id"] == "openai/gpt-4o"
+    assert called["raw_input"].startswith("[workflow]")

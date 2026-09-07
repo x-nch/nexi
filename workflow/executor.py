@@ -40,6 +40,12 @@ def _step_raw_input(step: dict[str, Any]) -> str:
     return base
 
 
+def _step_model_override(step: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Per-step model override from the claimed step (payload.model_*), if any."""
+    payload = step.get("payload") or {}
+    return payload.get("model_provider"), payload.get("model_id")
+
+
 async def _default_execute_step(
     step: dict[str, Any],
     *,
@@ -70,10 +76,13 @@ async def _default_execute_step(
         raw_input="",
         priority="NORMAL",
     )
+    model_provider, model_id = _step_model_override(step)
     return await run_pipeline_pass(
         xnch=xnch,
         session=session,
         raw_input=_step_raw_input(step),
+        model_provider=model_provider,
+        model_id=model_id,
         **pipeline_kwargs,
     )
 

@@ -3,14 +3,11 @@ import json
 import uuid
 from typing import Any
 
-import httpx
-
 from ..adapters.model_adapter import ModelAdapter
 from ..config import settings
 from ..models import SessionContext, Intent, ContextManifest, PlanOption
 from ..models.options import GenerationPath, ActionSpec
 from ..utils.audit import emit_event
-from xnch.routing.classifier import classify_request
 
 
 _OPTION_GENERATION_SYSTEM_PROMPT = """You are an option generator for a systems-management agent.
@@ -94,67 +91,58 @@ async def generate_options(
     intent: Intent,
     manifest: ContextManifest,
     n: int = 5,
+    *,
+    provider: str | None = None,
+    model_id: str | None = None,
 ) -> tuple[list[PlanOption], GenerationPath]:
     emit_event(session.trace_id, "option_generator", "GENERATION_START",
                {"n": n, "intent_class": intent.intent_class})
 
     context_summary = _build_context_summary(manifest)
 
-    model_route = classify_request(
-        raw_input=intent.raw_input,
-        actor_role=session.actor.role,
-        metadata={
-            "intent_class": intent.intent_class,
-            "complexity_score": 0.5,
-            "privacy_sensitive": False,
-        },
-    )
+    from ..adapters.llm import chat_completion
+    from ..adapters.model_router import routing_summary
+
+    routed_provider = routing_summary().split(";")[0].split("=")[-1]
 
     try:
         system_msg, user_msg = _build_option_prompt(intent, context_summary, n)
-        _headers = {"Content-Type": "application/json"}
-        if settings.opencode_go_api_key:
-            _headers["Authorization"] = f"Bearer {settings.opencode_go_api_key}"
-        async with httpx.AsyncClient(
-            base_url=settings.opencode_go_api_url, timeout=settings.opencode_go_api_timeout_s,
-            headers=_headers,
-        ) as client:
-            resp = await client.post(
-                "/chat/completions",
-                json={
-                    "model": settings.model_id,
-                    "messages": [
-                        {"role": "system", "content": system_msg},
-                        {"role": "user", "content": user_msg},
-                    ],
-                    "response_format": {"type": "json_object"},
-                },
+        body, _ = await chat_completion(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            intent_class=str(intent.intent_class.value),
+            json_mode=True,
+            temperature=0.4,
+            max_tokens=1500,
+            provider=provider,
+            model_id=model_id,
+        )
+        content = body["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+        items = parsed.get("options", [])
+        options = []
+        for item in items:
+            spec = ActionSpec(
+                type=item.get("action_type", ""),
+                target=item.get("action_spec", {}).get("target", intent.target_entity_id),
+                params=item.get("action_spec", {}).get("params", {}),
             )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
-            parsed = json.loads(content)
-            items = parsed.get("options", [])
-            options = []
-            for item in items:
-                spec = ActionSpec(
-                    type=item.get("action_type", ""),
-                    target=item.get("action_spec", {}).get("target", intent.target_entity_id),
-                    params=item.get("action_spec", {}).get("params", {}),
-                )
-                options.append(PlanOption(
-                    option_id=uuid.uuid4(),
-                    action_type=item["action_type"].upper(),
-                    action_spec=spec,
-                    stated_rationale=item.get("stated_rationale", ""),
-                    estimated_side_effects=item.get("estimated_side_effects", []),
-                    reversible=item.get("reversible", True),
-                    payload_hash="sha256:" + __import__("hashlib").sha256(json.dumps(spec.model_dump(), sort_keys=True).encode()).hexdigest(),
-                ))
+            options.append(PlanOption(
+                option_id=uuid.uuid4(),
+                action_type=item["action_type"].upper(),
+                action_spec=spec,
+                stated_rationale=item.get("stated_rationale", ""),
+                estimated_side_effects=item.get("estimated_side_effects", []),
+                reversible=item.get("reversible", True),
+                payload_hash="sha256:" + __import__("hashlib").sha256(json.dumps(spec.model_dump(), sort_keys=True).encode()).hexdigest(),
+            ))
 
         if options:
             emit_event(session.trace_id, "option_generator", "GENERATION_COMPLETE",
                        {"options_count": len(options), "path": "MODEL",
-                        "routed_model": model_route.model_name})
+                        "routed_provider": routed_provider})
             return options, GenerationPath.MODEL
     except Exception:
         pass
@@ -165,6 +153,8 @@ async def generate_options(
         target_entity_class=intent.target_entity_class,
         context_summary=context_summary,
         n=n,
+        provider=provider,
+        model_id=model_id,
     )
 
     emit_event(session.trace_id, "option_generator", "GENERATION_COMPLETE",

@@ -163,7 +163,7 @@ async def test_run_pipeline_pass_happy_path_dispatches_with_simulation_and_goal_
     dispatch_fn.assert_awaited_once()
     assert dispatch_fn.call_args.kwargs["simulation"] == simulation
     assert dispatch_fn.call_args.kwargs["goal_id"] == goal_id
-    assert gen_options.await_args.kwargs == {}
+    assert gen_options.await_args.kwargs == {"provider": None, "model_id": None}
     xnch.submit_verdict.assert_awaited_once()
     assert xnch.submit_verdict.call_args.kwargs["goal_id"] == goal_id
 
