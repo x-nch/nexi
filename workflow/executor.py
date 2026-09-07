@@ -51,6 +51,9 @@ async def _default_execute_step(
     *,
     xnch,
     session_factory=None,
+    model_adapter=None,
+    policy_filter=None,
+    intent_interpreter=None,
     **pipeline_kwargs: Any,
 ) -> Any:
     """Default execution path: one pipeline pass per claimed step."""
@@ -58,6 +61,20 @@ async def _default_execute_step(
 
     from nexi.models import Actor, ActorRole, SessionContext
     from nexi.pipeline.run import run_pipeline_pass
+
+    if model_adapter is None or policy_filter is None or intent_interpreter is None:
+        from nexi.adapters import ModelAdapter
+        from nexi.pipeline import IntentInterpreter, PolicyFilter
+
+        model_adapter = model_adapter if model_adapter is not None else ModelAdapter()
+        intent_interpreter = (
+            intent_interpreter
+            if intent_interpreter is not None
+            else IntentInterpreter()
+        )
+        policy_filter = (
+            policy_filter if policy_filter is not None else PolicyFilter(xnch)
+        )
 
     versions = (
         await session_factory(xnch) if session_factory else await _make_session(xnch)
@@ -79,6 +96,9 @@ async def _default_execute_step(
     model_provider, model_id = _step_model_override(step)
     return await run_pipeline_pass(
         xnch=xnch,
+        model_adapter=model_adapter,
+        policy_filter=policy_filter,
+        intent_interpreter=intent_interpreter,
         session=session,
         raw_input=_step_raw_input(step),
         model_provider=model_provider,
@@ -93,6 +113,9 @@ async def workflow_executor_loop(
     execute_fn: ExecuteFn = _default_execute_step,
     poll_interval_s: float | None = None,
     lease_owner: str = _LEASE_OWNER,
+    model_adapter=None,
+    policy_filter=None,
+    intent_interpreter=None,
 ) -> None:
     """Serialized claim → execute → outcome loop. Survives transient errors."""
     interval = (
@@ -114,7 +137,13 @@ async def workflow_executor_loop(
 
         step_uuid = step.get("step_uuid", "")
         try:
-            result = await execute_fn(step=step, xnch=xnch)
+            result = await execute_fn(
+                step=step,
+                xnch=xnch,
+                model_adapter=model_adapter,
+                policy_filter=policy_filter,
+                intent_interpreter=intent_interpreter,
+            )
             outcome = (
                 "SUCCESS"
                 if getattr(result, "status", "EXECUTING") == "EXECUTING"
