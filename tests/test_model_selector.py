@@ -80,3 +80,88 @@ def test_rank_models_sorts_by_score_desc():
         "provider", "model_id", "score", "quality", "latency_ms",
         "context_window", "elo", "tier",
     }
+
+
+# ---------------------------------------------------------------------------
+# Task 2: config loader, free-model detection, Redis store/read
+# ---------------------------------------------------------------------------
+
+import json
+
+import fakeredis
+from pydantic import ValidationError
+
+from nexi.adapters.model_selector import (
+    ModelSelectorConfig,
+    RedisConfig,
+    dump_rankings_json,
+    is_free_model,
+    load_config,
+    read_rankings,
+    redis_client_from,
+    write_rankings,
+)
+
+
+@pytest.fixture(autouse=True)
+def _cfg(monkeypatch):
+    """Default selector config wired to an in-memory fakeredis redis."""
+    client = fakeredis.FakeRedis()
+    conf = ModelSelectorConfig(
+        weights={"quality": 0.5, "latency": 0.3, "context": 0.2},
+        redis=RedisConfig(
+            url="redis://localhost:6379/0",
+            ttl_s=60,
+            rankings_key="model_selector:rankings",
+        ),
+    )
+    monkeypatch.setattr("nexi.adapters.model_selector._redis_client", client)
+    return conf
+
+
+def test_is_free_model_free_suffix_and_zero_pricing():
+    assert is_free_model("a/b:free", {"prompt": "0", "completion": "0"})
+    assert is_free_model("a/b", {"prompt": "0", "completion": "0"})
+    assert not is_free_model("a/b", {"prompt": "0.5", "completion": "0"})
+    assert not is_free_model("a/b", None)
+
+
+def test_load_config_defaults_when_missing():
+    cfg = load_config("/nonexistent/model_selector.yaml")
+    assert cfg.weights == {"quality": 0.5, "latency": 0.3, "context": 0.2}
+    assert cfg.probe.prompt == "Say hello in one sentence."
+
+
+def test_load_config_validates_weights_via_pydantic():
+    with pytest.raises((ValidationError, OSError, TypeError)):
+        ModelSelectorConfig(weights={"quality": [1, 2], "latency": 0.3, "context": 0.2})
+
+
+def test_redis_write_and_read_rankings_roundtrip():
+    r = fakeredis.FakeRedis()
+    key = "model_selector:rankings:test"
+    data = [{"provider": "openrouter", "model_id": "a", "score": 0.9}]
+    write_rankings(r, data, key, ttl_s=60)
+    assert read_rankings(r, key, ttl_s=60) == data
+
+
+def test_read_rankings_returns_none_when_missing():
+    r = fakeredis.FakeRedis()
+    assert read_rankings(r, "model_selector:nope", ttl_s=60) is None
+
+
+def test_read_rankings_returns_none_when_stale():
+    r = fakeredis.FakeRedis()
+    key = "model_selector:rankings:stale"
+    data = [{"model_id": "x", "score": 0.5}]
+    write_rankings(r, data, key, ttl_s=60)
+    # ttl_s<=0 forces early return (simulates stale data where caller
+    # declares the rankings have expired).
+    assert read_rankings(r, key, ttl_s=0) is None
+
+
+def test_dump_rankings_json(tmp_path):
+    p = tmp_path / "rankings.json"
+    dump_rankings_json([{"model_id": "a", "score": 0.9}], p)
+    assert p.exists()
+    assert json.loads(p.read_text())["rankings"][0]["model_id"] == "a"

@@ -7,8 +7,15 @@ intent. This module holds the pure scoring used by both.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+import os
+from pathlib import Path
+
+import redis as redis_lib
+import yaml
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -79,3 +86,92 @@ def rank_models(
         )
     scored.sort(key=lambda r: r["score"], reverse=True)
     return scored
+
+
+class ProberConfig(BaseModel):
+    prompt: str = "Say hello in one sentence."
+    timeout_s: float = 10.0
+    runs: int = 3
+
+
+class RedisConfig(BaseModel):
+    url: str = "redis://localhost:6379/0"
+    ttl_s: int = 86_400
+    rankings_key: str = "model_selector:rankings"
+
+
+class ModelSelectorConfig(BaseModel):
+    weights: dict[str, float] = Field(default_factory=lambda: dict(DEFAULT_WEIGHTS))
+    probe: ProberConfig = Field(default_factory=ProberConfig)
+    quality_tiers: dict[str, float] = Field(default_factory=lambda: dict(TIER_SCORES))
+    manual_tiers: dict[str, str] = Field(default_factory=dict)
+    redis: RedisConfig = Field(default_factory=RedisConfig)
+
+
+_redis_client: "redis_lib.Redis | None" = None
+
+
+def redis_client_from(config: ModelSelectorConfig) -> "redis_lib.Redis":
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
+    _redis_client = redis_lib.from_url(config.redis.url, decode_responses=True)
+    return _redis_client
+
+
+def load_config(path: str | None = None) -> ModelSelectorConfig:
+    """Load YAML config over defaults.  Missing/corrupt file degrades to defaults."""
+    path = path or os.environ.get("NEXI_MODEL_SELECTOR_CONFIG", "") or None
+    cfg = ModelSelectorConfig()
+    if not path or not os.path.exists(path):
+        if path:
+            logger.warning("model-selector config %s not found; using defaults", path)
+        return cfg
+    try:
+        with open(path) as fh:
+            raw = yaml.safe_load(fh) or {}
+        cfg = ModelSelectorConfig.model_validate(raw)
+    except Exception as exc:
+        logger.warning("Failed to load model-selector config %s: %s; using defaults", path, exc)
+    return cfg
+
+
+def is_free_model(model_id: str, pricing: dict | None) -> bool:
+    """True for OpenRouter free models: ``:free`` suffix or zero prompt price."""
+    if model_id.endswith(":free"):
+        return True
+    if not pricing:
+        return False
+    try:
+        return float(pricing.get("prompt", 1)) == 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def write_rankings(client: "redis_lib.Redis", rankings: list[dict], key: str, ttl_s: int) -> None:
+    client.set(key, json.dumps(rankings), ex=ttl_s)
+
+
+def read_rankings(client: "redis_lib.Redis", key: str, ttl_s: int) -> list[dict] | None:
+    """Return rankings or None if missing, stale (ttl_s<=0), or unparseable."""
+    if ttl_s <= 0:
+        return None
+    try:
+        raw = client.get(key)
+    except Exception as exc:
+        logger.warning("Redis read failed for %s: %s", key, exc)
+        return None
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        logger.warning("Bad rankings JSON under %s: %s", key, exc)
+        return None
+
+
+def dump_rankings_json(rankings: list[dict], path: str | Path) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    payload = {"run_at": "", "rankings": rankings}
+    with open(path, "w") as fh:
+        json.dump(payload, fh, indent=2)
