@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from nexi.adapters.model_selector import (
     TIER_SCORES,
     context_score,
+    elo_to_score,
     normalized_latency,
     rank_models,
     tier_from_elo,
@@ -39,6 +42,28 @@ def test_normalized_latency_caps_at_10s():
     assert normalized_latency(0) == 0.0
     assert normalized_latency(500) == pytest.approx(0.05)
     assert normalized_latency(20_000) == 1.0
+
+
+def test_elo_to_score_midpoint_and_bounds():
+    assert elo_to_score(0.0) == pytest.approx(0.05)
+    assert elo_to_score(1200.0) == pytest.approx(0.05)
+    assert elo_to_score(1500.0) == pytest.approx(1.0 - math.exp(-1.0), abs=1e-6)
+    assert elo_to_score(20_000.0) == pytest.approx(1.0)
+
+
+def test_rank_models_handles_missing_elo():
+    models = [
+        {"provider": "openrouter", "model_id": "a", "context_window": 128_000},
+        {"provider": "openrouter", "model_id": "b", "context_window": 32_000},
+    ]
+    ranked = rank_models(models, {}, {"a": "frontier", "b": "weak"})
+    assert ranked[0]["elo"] is None
+    assert ranked[0]["model_id"] == "a"
+    assert ranked[-1]["model_id"] == "b"
+
+
+def test_rank_models_empty_input():
+    assert rank_models([], {}, {}) == []
 
 
 def test_rank_models_sorts_by_score_desc():

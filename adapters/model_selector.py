@@ -56,7 +56,8 @@ def rank_models(
     scored: list[dict] = []
     for m in models:
         mid = m["model_id"]
-        quality = tier_from_elo(elo.get(mid), tiers.get(mid))
+        elo_val = elo.get(mid)
+        quality = tier_from_elo(elo_val, tiers.get(mid))
         lat = int(m.get("latency_ms", 0))
         ctx = int(m.get("context_window", 64_000))
         score = (
@@ -72,7 +73,7 @@ def rank_models(
                 "quality": round(quality, 4),
                 "latency_ms": lat,
                 "context_window": ctx,
-                "elo": round(elo[mid], 1) if mid in elo else None,
+                "elo": round(elo_val, 1) if elo_val is not None else None,
                 "tier": tiers.get(mid),
             }
         )
