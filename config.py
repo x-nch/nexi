@@ -73,6 +73,17 @@ class Settings(BaseSettings):
     openrouter_free_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
     openrouter_free_models: list = Field(default_factory=list)
 
+    # --- Free model selector (CLI writes rankings; runtime module reads) ---
+    model_selector_weights: dict[str, float] = Field(
+        default_factory=lambda: {"quality": 0.5, "latency": 0.3, "context": 0.2}
+    )
+    model_selector_config_path: str = "config/model_selector.yaml"
+    model_selector_redis_ttl_s: int = 86_400
+    model_selector_probe_prompt: str = "Say hello in one sentence."
+    model_selector_probe_timeout_s: float = 10.0
+    model_selector_probe_runs: int = 3
+    model_selector_rankings_key: str = "model_selector:rankings"
+
     # Session
     session_ttl_s: int = 120
     clarification_ttl_s: int = 120
