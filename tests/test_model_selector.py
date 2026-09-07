@@ -115,6 +115,7 @@ def _cfg(monkeypatch):
             rankings_key="model_selector:rankings",
         ),
     )
+    conf._fake_redis = client
     monkeypatch.setattr("nexi.adapters.model_selector._redis_client", client)
     return conf
 
@@ -165,3 +166,48 @@ def test_dump_rankings_json(tmp_path):
     dump_rankings_json([{"model_id": "a", "score": 0.9}], p)
     assert p.exists()
     assert json.loads(p.read_text())["rankings"][0]["model_id"] == "a"
+
+
+# ---------------------------------------------------------------------------
+# Task 4: Runtime ModelSelector + Redis show command + __init__ re-export
+# ---------------------------------------------------------------------------
+
+from nexi.adapters.model_router import ModelSpec
+from nexi.adapters.model_selector import ModelSelector, write_rankings
+
+
+async def test_get_best_model_returns_top_ranked_for_intent(_cfg, monkeypatch):
+    sel = ModelSelector(config=_cfg)
+    entries = [
+        {"provider": "openrouter", "model_id": "google/gemini-2.0-flash-001", "score": 0.9,
+         "quality": 0.75, "latency_ms": 500, "context_window": 1_000_000, "elo": 1200.0, "tier": "strong"},
+        {"provider": "openrouter", "model_id": "nvidia/nemotron-3-super-120b-a12b:free", "score": 0.6,
+         "quality": 0.5, "latency_ms": 900, "context_window": 128_000, "elo": None, "tier": "mid"},
+    ]
+    write_rankings(_cfg._fake_redis, entries, _cfg.redis.rankings_key, _cfg.redis.ttl_s)
+    best = await sel.get_best_model("QUERY")
+    assert isinstance(best, ModelSpec)
+    assert best.id == "google/gemini-2.0-flash-001"
+    assert best.cost_tier == 1  # free → cheapest tier
+
+
+async def test_get_best_model_excludes_paid_or_excluded(_cfg, monkeypatch):
+    sel = ModelSelector(config=_cfg)
+    write_rankings(_cfg._fake_redis, [], _cfg.redis.rankings_key, _cfg.redis.ttl_s)
+    assert await sel.get_best_model("QUERY") is None
+
+
+async def test_is_available_true_when_fresh(_cfg, monkeypatch):
+    sel = ModelSelector(config=_cfg)
+    write_rankings(_cfg._fake_redis, [{"model_id": "a", "score": 0.5}], _cfg.redis.rankings_key, _cfg.redis.ttl_s)
+    assert await sel.is_available() is True
+
+
+async def test_is_available_false_when_stale(_cfg, monkeypatch):
+    sel = ModelSelector(config=_cfg)
+    # Write valid rankings first
+    write_rankings(_cfg._fake_redis, [{"model_id": "a", "score": 0.5}], _cfg.redis.rankings_key, _cfg.redis.ttl_s)
+    # ttl_s=0 => force-stale by passing a config with ttl 0
+    stale_redis_config = _cfg.redis.model_copy(update={"ttl_s": 0})
+    sel2 = ModelSelector(config=_cfg.model_copy(update={"redis": stale_redis_config}))
+    assert await sel2.is_available() is False

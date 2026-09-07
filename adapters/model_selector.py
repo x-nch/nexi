@@ -12,12 +12,15 @@ import json
 import logging
 import math
 import os
+import time
 from pathlib import Path
 
 import httpx
 import redis as redis_lib
 import yaml
 from pydantic import BaseModel, Field
+
+from .model_router import PROVIDER_OPENROUTER, ModelSpec
 
 logger = logging.getLogger(__name__)
 
@@ -179,17 +182,47 @@ def dump_rankings_json(rankings: list[dict], path: str | Path) -> None:
         json.dump(payload, fh, indent=2)
 
 
-_CAP_MONOTONIC = 0.0  # replaced in tests
+def _median(vals: list[float]) -> float:
+    s = sorted(vals)
+    n = len(s)
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def _safe_context(item: dict) -> int:
+    for key in ("context_length", "max_context_length", "context_window"):
+        raw = item.get(key)
+        if raw is None:
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return 64_000
 
 
 async def discover_opencode(client: httpx.AsyncClient, api_url: str) -> list[dict]:
-    """List models exposed by an OpenCode Go endpoint (auth'd subscription)."""
-    resp = await client.get(f"{api_url}/models")
-    resp.raise_for_status()
-    data = resp.json()
-    models = data.get("data") or data.get("models") or []
+    """List models exposed by an OpenCode Go endpoint (auth'd subscription).
+
+    Returns ``[]`` when the upstream is unreachable or errors, so one dead
+    provider never aborts a run.
+    """
+    try:
+        resp = await client.get(f"{api_url}/models")
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("opencode discovery failed at %s: %s", api_url, exc)
+        return []
+    if isinstance(data, list):
+        models = data
+    elif isinstance(data, dict):
+        models = data.get("data") or data.get("models") or []
+    else:
+        return []
     out = []
     for item in models:
+        if not isinstance(item, dict):
+            continue
         mid = item.get("id") or item.get("model")
         if not mid:
             continue
@@ -197,7 +230,7 @@ async def discover_opencode(client: httpx.AsyncClient, api_url: str) -> list[dic
             {
                 "provider": "opencode",
                 "model_id": mid,
-                "context_window": int(item.get("context_length", item.get("max_context_length", 64_000))),
+                "context_window": _safe_context(item),
                 "latency_ms": 0,
             }
         )
@@ -205,12 +238,27 @@ async def discover_opencode(client: httpx.AsyncClient, api_url: str) -> list[dic
 
 
 async def discover_openrouter(client: httpx.AsyncClient, api_url: str) -> list[dict]:
-    """List OpenRouter free models only."""
-    resp = await client.get(f"{api_url}/models")
-    resp.raise_for_status()
-    data = resp.json() or {}
+    """List OpenRouter free models only.
+
+    Returns ``[]`` when the upstream is unreachable or errors.
+    """
+    try:
+        resp = await client.get(f"{api_url}/models")
+        resp.raise_for_status()
+        data = resp.json() or {}
+    except Exception as exc:
+        logger.warning("openrouter discovery failed at %s: %s", api_url, exc)
+        return []
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        items = data.get("data", [])
+    else:
+        return []
     out = []
-    for item in data.get("data", []):
+    for item in items:
+        if not isinstance(item, dict):
+            continue
         mid = item.get("id")
         if not mid or not is_free_model(mid, item.get("pricing")):
             continue
@@ -218,7 +266,7 @@ async def discover_openrouter(client: httpx.AsyncClient, api_url: str) -> list[d
             {
                 "provider": "openrouter",
                 "model_id": mid,
-                "context_window": int(item.get("context_length", 64_000)),
+                "context_window": _safe_context(item),
                 "latency_ms": 0,
             }
         )
@@ -232,16 +280,21 @@ async def fetch_elo(client: httpx.AsyncClient) -> dict[str, float]:
         resp = await client.get(url)
         resp.raise_for_status()
         rows = resp.json()
+        if not isinstance(rows, list):
+            logger.warning("ELO fetch returned %s, expected a list of rows", type(rows).__name__)
+            return {}
+        elo: dict[str, float] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = row.get("model_name") or row.get("model")
+            val = row.get("elo")
+            if name and isinstance(val, (int, float)):
+                elo[name] = float(val)
+        return elo
     except Exception as exc:
         logger.warning("ELO fetch failed: %s", exc)
         return {}
-    elo: dict[str, float] = {}
-    for row in rows:
-        name = row.get("model_name") or row.get("model")
-        val = row.get("elo")
-        if name and isinstance(val, (int, float)):
-            elo[name] = float(val)
-    return elo
 
 
 async def probe_latency(
@@ -254,13 +307,16 @@ async def probe_latency(
     timeout_s: float,
     runs: int,
 ) -> dict:
-    """Send a minimal completion and return ttft/total medians (ms)."""
-    import time as _time
+    """Send a minimal completion and return ttft/total medians (ms).
 
+    ``ttft_ms`` is the median time to the first streamed chunk and ``total_ms``
+    the median full-response time across ``runs``; ``{ok: False}`` on any
+    transport or HTTP error.
+    """
     samples_total: list[float] = []
-    last_ttft = 0.0
+    samples_ttft: list[float] = []
     for _ in range(max(1, runs)):
-        started = _time.monotonic()
+        started = time.monotonic()
         first_chunk_at: float | None = None
         try:
             async with client.stream(
@@ -273,13 +329,15 @@ async def probe_latency(
                     "stream": True,
                 },
                 headers={"Authorization": f"Bearer {api_key}"},
+                timeout=timeout_s,
             ) as resp:
+                resp.raise_for_status()
                 async for chunk in resp.aiter_bytes():
                     if first_chunk_at is None:
-                        first_chunk_at = _time.monotonic()
+                        first_chunk_at = time.monotonic()
                     if b"data: [DONE]" in chunk:
                         break
-            done = _time.monotonic()
+            done = time.monotonic()
         except Exception as exc:
             logger.warning("probe %s/%s failed: %s", provider, model_id, exc)
             return {
@@ -291,18 +349,70 @@ async def probe_latency(
                 "probed_at": _dt.datetime.now().isoformat(),
             }
         samples_total.append((done - started) * 1000)
-        last_ttft = ((first_chunk_at or started) - started) * 1000
-
-    def _median(vals: list[float]) -> float:
-        s = sorted(vals)
-        n = len(s)
-        return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+        first_at = first_chunk_at if first_chunk_at is not None else done
+        samples_ttft.append((first_at - started) * 1000)
 
     return {
         "provider": provider,
         "model_id": model_id,
         "ok": True,
-        "ttft_ms": round(_median(samples_total), 1),
-        "total_ms": round(_median([last_ttft]), 1),
+        "ttft_ms": round(_median(samples_ttft), 1),
+        "total_ms": round(_median(samples_total), 1),
         "probed_at": _dt.datetime.now().isoformat(),
     }
+
+
+INTENT_STRENGTHS: dict[str, set[str]] = {
+    "DECISION": {"DECISION", "EXECUTION"},
+    "EXECUTION": {"EXECUTION"},
+    "QUERY": {"QUERY", "ESCALATION"},
+    "ESCALATION": {"QUERY", "ESCALATION"},
+}
+
+_FREE_TIER = 1  # free models always rank cheapest for cost budgeting
+
+
+def _ranking_to_model_spec(entry: dict) -> ModelSpec:
+    return ModelSpec(
+        id=entry["model_id"],
+        cost_tier=_FREE_TIER,
+        context_window=int(entry.get("context_window", 64_000)),
+        strengths=INTENT_STRENGTHS.get("QUERY", {"QUERY", "ESCALATION"}).copy(),
+        latency_ms=int(entry.get("latency_ms", 0)),
+        description=(
+            f"free {entry.get('provider', '?')} model, elo={entry.get('elo')}, "
+            f"tier={entry.get('tier')}, score={entry.get('score')}"
+        ),
+    )
+
+
+class ModelSelector:
+    """Reads Redis rankings and returns the best free model for an intent."""
+
+    def __init__(self, config: ModelSelectorConfig | None = None, redis=None):
+        self._config = config or load_config()
+        self._redis = redis or redis_client_from(self._config)
+
+    async def get_best_model(
+        self,
+        intent: str,
+        budget: str = "balanced",
+        exclude: list[str] | None = None,
+    ) -> ModelSpec | None:
+        ranked = await self.get_ranked_models(intent, limit=50)
+        excluded = set(exclude or [])
+        for model_spec in ranked:
+            if model_spec.id in excluded:
+                continue
+            return model_spec
+        return None
+
+    async def get_ranked_models(self, intent: str, limit: int = 5) -> list[ModelSpec]:
+        ranked = read_rankings(self._redis, self._config.redis.rankings_key, self._config.redis.ttl_s)
+        if not ranked:
+            return []
+        # Take top 'limit' models by score (rankings are already sorted descending by score)
+        return [_ranking_to_model_spec(entry) for entry in ranked[:limit]]
+
+    async def is_available(self) -> bool:
+        return bool(read_rankings(self._redis, self._config.redis.rankings_key, self._config.redis.ttl_s))
