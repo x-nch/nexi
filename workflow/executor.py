@@ -11,6 +11,8 @@ import asyncio
 import logging
 from typing import Any, Awaitable, Callable
 
+import httpx
+
 from nexi.config import settings
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,41 @@ async def _make_session(xnch) -> dict[str, str]:
         "system_state_version": state.get("system_state_version", ""),
         "policy_version": state.get("policy_version", ""),
     }
+
+
+async def _dispatch_execution(xnch, step: dict[str, Any]) -> str:
+    """Dispatch action spec to xnch execution endpoint."""
+    # Build action_spec from step fields (workflow step format)
+    action_spec = step.get("payload", {}).get("action_spec")
+    if not action_spec:
+        # Build from step fields: kind -> type, target, args -> params
+        kind = step.get("kind") or step.get("payload", {}).get("kind")
+        target = step.get("target") or step.get("payload", {}).get("target")
+        args = step.get("args") or step.get("payload", {}).get("args") or {}
+        if kind and target:
+            action_spec = {"type": kind.upper(), "target": target, "params": args}
+    
+    if not action_spec:
+        logger.warning("no action_spec in step payload: keys=%s", list(step.keys()))
+        return "FAILURE"
+
+    body = {
+        "execution_ref": step.get("step_uuid", ""),
+        "decision_id": step.get("step_uuid", ""),
+        "action_spec": action_spec,
+        "simulation": {},
+    }
+
+    xnch_url = settings.xnch_base_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(base_url=xnch_url, timeout=60.0) as client:
+            resp = await client.post("/execution/execute", json=body)
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("outcome_status", "SUCCESS")
+    except httpx.HTTPError as exc:
+        logger.error("execution dispatch failed (step=%s): %s", step.get("step_uuid"), exc)
+        return "FAILURE"
 
 
 def _step_raw_input(step: dict[str, Any]) -> str:
@@ -116,6 +153,7 @@ async def workflow_executor_loop(
     model_adapter=None,
     policy_filter=None,
     intent_interpreter=None,
+    dispatch_enabled: bool = True,
 ) -> None:
     """Serialized claim → execute → outcome loop. Survives transient errors."""
     interval = (
@@ -144,11 +182,17 @@ async def workflow_executor_loop(
                 policy_filter=policy_filter,
                 intent_interpreter=intent_interpreter,
             )
-            outcome = (
-                "SUCCESS"
-                if getattr(result, "status", "EXECUTING") == "EXECUTING"
-                else "FAILURE"
-            )
+            pipeline_status = getattr(result, "status", "EXECUTING")
+            
+            # If pipeline returns EXECUTING, dispatch the action to execution endpoint
+            if pipeline_status == "EXECUTING" and dispatch_enabled:
+                dispatch_outcome = await _dispatch_execution(xnch, step)
+                outcome = dispatch_outcome
+            elif pipeline_status == "EXECUTING":
+                # dispatch disabled (e.g., tests) - treat EXECUTING as success
+                outcome = "SUCCESS"
+            else:
+                outcome = "FAILURE"
         except asyncio.CancelledError:
             # release lease implicitly via expiry; surface cancellation
             logger.error("executor cancelled mid-step (step=%s)", step_uuid)

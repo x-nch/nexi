@@ -127,7 +127,7 @@ async def test_loop_claims_executes_and_reports_success(monkeypatch):
 
     monkeypatch.setattr("nexi.workflow.executor.asyncio.sleep", _stop_after(2))
     with pytest.raises(_StopClock):
-        await workflow_executor_loop(xnch=xnch, execute_fn=execute_fn)
+        await workflow_executor_loop(xnch=xnch, execute_fn=execute_fn, dispatch_enabled=False)
 
     execute_fn.assert_awaited_once()
     assert execute_fn.await_args.kwargs["step"]["step_uuid"] == step["step_uuid"]
