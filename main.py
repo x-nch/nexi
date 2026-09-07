@@ -1,5 +1,6 @@
 """Nexi v0 — decision engine FastAPI application."""
 import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -140,15 +141,15 @@ async def lifespan(app: FastAPI):
 
     if workflow_task is not None:
         workflow_task.cancel()
-        with asyncio.suppress(asyncio.CancelledError):
+        with contextlib.suppress(asyncio.CancelledError):
             await workflow_task
     if goal_task is not None:
         goal_task.cancel()
-        with asyncio.suppress(asyncio.CancelledError):
+        with contextlib.suppress(asyncio.CancelledError):
             await goal_task
     if capability_task is not None:
         capability_task.cancel()
-        with asyncio.suppress(asyncio.CancelledError):
+        with contextlib.suppress(asyncio.CancelledError):
             await capability_task
     await _xnch.aclose()
 
