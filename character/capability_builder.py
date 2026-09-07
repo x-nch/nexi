@@ -46,6 +46,7 @@ _KNOWN_GROUPS: dict[str, str] = {
     "am_": "agent_memory",
     "doc_": "library_docs",
     "c7_": "library_docs",
+    "spotify_": "media",
 }
 
 
@@ -149,6 +150,8 @@ def _build_tool_routing(grouped: dict[str, list[str]]) -> str:
         rules.append("Current events / external docs / CVEs? → xnch_web_search")
     if "library_docs" in grouped:
         rules.append("Library/framework API docs? → doc_* (or c7_* when live Context7 enabled)")
+    if "media" in grouped:
+        rules.append("Spotify playback / search / playlists? → spotify_*")
     return "\n".join(rules)
 
 
@@ -261,8 +264,8 @@ def build_capabilities(snapshot: InfraSnapshot, inventory: ToolInventory) -> dic
     routing = _build_tool_routing(grouped)
     if bridge_active:
         routing += (
-            "\nMCP bridge is ACTIVE: bridged tools (crg_*, am_*, doc_*, c7_*) are "
-            "available; max tool rounds increases to 5."
+            "\nMCP bridge is ACTIVE: bridged tools (crg_*, am_*, doc_*, c7_*, spotify_*) "
+            "are available; max tool rounds increases to 5."
         )
 
     return {

@@ -36,6 +36,12 @@ def _inventory() -> ToolInventory:
                 "connected": True,
                 "tools": ["am_memory_recall", "am_memory_save"],
             },
+            "spotify": {
+                "prefix": "spotify_",
+                "server": "spotify",
+                "connected": True,
+                "tools": ["spotify_searchSpotify", "spotify_getNowPlaying"],
+            },
         },
     )
 
@@ -61,6 +67,8 @@ def test_group_tools():
     assert "crg_query_graph_tool" in grouped["code_graph"]
     assert "am_memory_recall" in grouped["agent_memory"]
     assert "web_search" in grouped
+    assert "media" in grouped
+    assert "spotify_searchSpotify" in grouped["media"]
 
 
 def test_build_tool_routing():
@@ -69,6 +77,7 @@ def test_build_tool_routing():
     assert "xnch_fs_*" in routing
     assert "am_memory_*" in routing
     assert "xnch_web_search" in routing
+    assert "spotify_*" in routing
 
 
 def test_build_capabilities_structure(tmp_path):
@@ -86,6 +95,8 @@ def test_build_capabilities_structure(tmp_path):
     # discovered bridged tools are appended
     assert any(str(i).startswith("crg_query_graph_tool") for i in caps["tools"]["code_graph"])
     assert caps["bridge"]["servers"]["code-review-graph"]["connected"] is True
+    assert caps["bridge"]["servers"]["spotify"]["connected"] is True
+    assert "spotify_*" in caps["tool_routing"]
     assert caps["status"]["down"] == ["nexi"]
     assert caps["filesystem"]["read_only"] is True
     assert "generated_at" in caps
@@ -142,6 +153,10 @@ servers:
   context7:
     enabled: false
     tool_prefix: c7_
+  spotify:
+    enabled: true
+    tier: T1_WRITE
+    tool_prefix: spotify_
 """
     )
     monkeypatch.setattr("nexi.character.capability_builder.settings.mcp_servers_path", str(cfg))
@@ -156,6 +171,9 @@ servers:
     assert "docs-test" in inventory.bridged
     assert inventory.bridged["docs-test"]["tools"] == ["query-docs", "resolve-library-id"]
     assert "context7" not in inventory.bridged
+    assert "spotify" in inventory.bridged
+    assert inventory.bridged["spotify"]["prefix"] == "spotify_"
+    assert inventory.bridged["spotify"]["tools"] == []
 
 
 async def test_refresh_writes_overlay(tmp_path, monkeypatch):
