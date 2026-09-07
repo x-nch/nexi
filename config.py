@@ -3,6 +3,8 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+import os
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NEXI_")
@@ -62,6 +64,12 @@ class Settings(BaseSettings):
     litellm_api_key: str = ""
     litellm_model_id: str = "ornith"
     litellm_models: list = Field(default_factory=list)
+
+    def model_post_init(self, __context) -> None:
+        # Explicitly read from os.environ as fallback for pydantic-settings
+        self.litellm_proxy_url = os.environ.get("NEXI_LITELLM_PROXY_URL", self.litellm_proxy_url)
+        self.litellm_api_key = os.environ.get("NEXI_LITELLM_API_KEY", self.litellm_api_key)
+        self.nexi_default_resolves_to = os.environ.get("NEXI_NEXI_DEFAULT_RESOLVES_TO", self.nexi_default_resolves_to)
 
     # Legacy: local vLLM (kept for rollback + persona probing)
     vllm_primary_url: str = ""
