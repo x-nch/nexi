@@ -6,6 +6,11 @@ model adapter, reflection, and the chat tool loop) go through
 :mod:`nexi.adapters.model_router` and POSTs to the resolved backend's
 ``/chat/completions`` endpoint.
 
+:func:`chat_completion_with_fallback` adds a cross-provider safety net: when the
+primary provider (e.g. the local LiteLLM/vLLM proxy) errors, it fails over to
+OpenRouter using **free models only** (``:free``-suffixed ids or the
+``openrouter_free_models`` allowlist), never a paid catalog entry.
+
 This keeps Nexi the single decision-maker for *which* model serves each request
 (chat + internals by default) while making it trivial to point a specific call
 at opencode or openrouter explicitly (per-agent / per-step overrides).
@@ -90,6 +95,94 @@ async def chat_completion(
         body = resp.json()
     await _emit_trace(messages, body, target, int((time.time() - t0) * 1000))
     return body, target
+
+
+def is_free_model(model_id: str | None) -> bool:
+    """True when a model id is OpenRouter free-tier: ``:free`` suffix or in the
+    configured ``openrouter_free_models`` allowlist."""
+    if not model_id:
+        return False
+    lowered = model_id.lower()
+    if lowered.endswith(":free"):
+        return True
+    free_list = [m.lower() for m in settings.openrouter_free_models]
+    return lowered in free_list
+
+
+async def chat_completion_with_fallback(
+    messages: list[dict[str, Any]],
+    *,
+    intent_class: str = "QUERY",
+    budget: str | None = None,
+    provider: str | None = None,
+    model_id: str | None = None,
+    response_format: str | None = None,
+    temperature: float = 0.7,
+    max_tokens: int | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | None = None,
+    json_mode: bool = False,
+) -> tuple[dict[str, Any], ModelResolution]:
+    """Chat completion with cross-provider failover to OpenRouter free models.
+
+    Tries the primary provider (default: nexi-default → local LiteLLM/vLLM when
+    configured). On any transport/HTTP error it fails over to OpenRouter via
+    ``settings.openrouter_free_model`` — guarded to free-tier ids only — when an
+    OpenRouter API key is configured. The returned ``ModelResolution`` reflects
+    which backend actually served the call.
+    """
+    from .model_router import ModelResolution  # local to avoid circular import at module load
+
+    try:
+        return await chat_completion(
+            messages,
+            intent_class=intent_class,
+            budget=budget,
+            provider=provider,
+            model_id=model_id,
+            response_format=response_format,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+            json_mode=json_mode,
+        )
+    except Exception as primary_exc:
+        if not settings.openrouter_api_key:
+            logger.warning(
+                "Primary chat provider failed and no OpenRouter key is set; "
+                "failing through: %s",
+                primary_exc,
+            )
+            raise
+        free_model = settings.openrouter_free_model
+        if not is_free_model(free_model):
+            logger.warning(
+                "openrouter_free_model=%r is not free-tier; not failing over. "
+                "Primary error: %s",
+                free_model,
+                primary_exc,
+            )
+            raise
+        logger.warning(
+            "Primary chat provider failed (%s); falling back to OpenRouter "
+            "free model %r",
+            primary_exc,
+            free_model,
+        )
+        return await chat_completion(
+            messages,
+            intent_class=intent_class,
+            budget=budget,
+            provider=PROVIDER_OPENROUTER,
+            model_id=free_model,
+            response_format=response_format,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+            json_mode=json_mode,
+        )
 
 
 async def _emit_trace(

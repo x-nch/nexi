@@ -30,8 +30,9 @@ logger = logging.getLogger(__name__)
 # Provider ids understood by the router / LLM client.
 PROVIDER_OPENCODE = "opencode"
 PROVIDER_OPENROUTER = "openrouter"
+PROVIDER_LITELLM = "litellm"
 PROVIDER_NEXI_DEFAULT = "nexi-default"
-DEFAULT_PROVIDERS = (PROVIDER_OPENCODE, PROVIDER_OPENROUTER, PROVIDER_NEXI_DEFAULT)
+DEFAULT_PROVIDERS = (PROVIDER_OPENCODE, PROVIDER_OPENROUTER, PROVIDER_LITELLM, PROVIDER_NEXI_DEFAULT)
 
 
 @dataclass
@@ -96,6 +97,16 @@ DEFAULT_OPENROUTER_MODELS: list[ModelSpec] = [
     ),
 ]
 
+# Default litellm (local vLLM proxy) catalog. The proxy itself maps the
+# model name (ornith) to concrete backends; override via NEXI_LITELLM_MODELS.
+DEFAULT_LITELLM_MODELS: list[ModelSpec] = [
+    ModelSpec(
+        "ornith", cost_tier=2, context_window=64_000,
+        strengths={"DECISION", "EXECUTION", "QUERY", "ESCALATION"}, latency_ms=800,
+        description="Local ornith vLLM served via the LiteLLM proxy.",
+    ),
+]
+
 # Per-intent ordered [preferred, fallback] model ids, keyed by provider. Ids
 # must exist in the provider's own catalog.
 _INTENT_TIERS: dict[str, dict[str, list[str]]] = {
@@ -110,6 +121,12 @@ _INTENT_TIERS: dict[str, dict[str, list[str]]] = {
         "DECISION": ["anthropic/claude-sonnet-4", "openai/gpt-4o"],
         "ESCALATION": ["openai/gpt-4o", "google/gemini-2.0-flash-001"],
         "QUERY": ["google/gemini-2.0-flash-001", "anthropic/claude-sonnet-4"],
+    },
+    PROVIDER_LITELLM: {
+        "EXECUTION": ["ornith"],
+        "DECISION": ["ornith"],
+        "ESCALATION": ["ornith"],
+        "QUERY": ["ornith"],
     },
 }
 
@@ -146,6 +163,10 @@ def _registry(provider: str) -> dict[str, ModelSpec]:
         return _catalog_from_settings(
             getattr(settings, "openrouter_models", None), DEFAULT_OPENROUTER_MODELS
         )
+    if provider == PROVIDER_LITELLM:
+        return _catalog_from_settings(
+            getattr(settings, "litellm_models", None), DEFAULT_LITELLM_MODELS
+        )
     # opencode (and nexi-default → resolved upstream) use the opencode catalog.
     return _catalog_from_settings(
         getattr(settings, "opencode_go_models", None), DEFAULT_OPENCODE_MODELS
@@ -156,10 +177,14 @@ def _resolve_provider(provider: str | None) -> str:
     """Resolve ``provider`` to a real backend id.
 
     ``None``/``nexi-default`` → ``settings.nexi_default_resolves_to`` (or the
-    legacy default ``settings.model_id`` family behavior via opencode).
+    legacy default ``settings.model_id`` family behavior via opencode). When a
+    LiteLLM proxy is configured (``settings.litellm_proxy_url``) the default
+    resolves to ``litellm`` so the local vLLM model serves chat + internals.
     """
     requested = provider or settings.default_provider
     if requested in (PROVIDER_NEXI_DEFAULT, "auto", ""):
+        if settings.litellm_proxy_url:
+            return PROVIDER_LITELLM
         resolved = (
             settings.nexi_default_resolves_to
             if settings.nexi_default_resolves_to
@@ -241,6 +266,14 @@ def resolve(
             base_url=settings.openrouter_api_url,
             api_key=settings.openrouter_api_key,
             timeout_s=settings.openrouter_api_timeout_s,
+        )
+    if provider == PROVIDER_LITELLM:
+        return ModelResolution(
+            provider=provider,
+            model_id=spec.id,
+            base_url=settings.litellm_proxy_url,
+            api_key=settings.litellm_api_key,
+            timeout_s=settings.litellm_proxy_timeout_s,
         )
     return ModelResolution(
         provider=PROVIDER_OPENCODE,

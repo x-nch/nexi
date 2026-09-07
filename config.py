@@ -52,14 +52,26 @@ class Settings(BaseSettings):
     reflection_model: str = "nexi-default"
     reflection_enabled: bool = True
 
-    # Legacy: local vLLM / LiteLLM fallback (kept for rollback; unused by default)
+    # Local provider: LiteLLM proxy in front of the local vLLM (node-b ornith).
+    # When litellm_proxy_url is set, nexi-default resolves to the litellm provider
+    # and chat/internals are served by the local model, with OpenRouter (free
+    # models only) as cross-provider fallback.
+    litellm_proxy_url: str = ""
+    litellm_proxy_timeout_s: float = 60.0
+    litellm_api_key: str = ""
+    litellm_model_id: str = "ornith"
+    litellm_models: list = Field(default_factory=list)
+
+    # Legacy: local vLLM (kept for rollback + persona probing)
     vllm_primary_url: str = ""
     vllm_primary_timeout_s: float = 30.0
     vllm_secondary_url: str = ""
     vllm_secondary_timeout_s: float = 45.0
-    litellm_proxy_url: str = ""
-    litellm_proxy_timeout_s: float = 60.0
-    litellm_api_key: str = ""
+
+    # OpenRouter free-model fallback (used only when the primary provider errors,
+    # and only with `:free`-suffixed models when no paid key is configured).
+    openrouter_free_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
+    openrouter_free_models: list = Field(default_factory=list)
 
     # Session
     session_ttl_s: int = 120
