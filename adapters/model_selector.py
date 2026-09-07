@@ -7,12 +7,14 @@ intent. This module holds the pure scoring used by both.
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import math
 import os
 from pathlib import Path
 
+import httpx
 import redis as redis_lib
 import yaml
 from pydantic import BaseModel, Field
@@ -175,3 +177,132 @@ def dump_rankings_json(rankings: list[dict], path: str | Path) -> None:
     payload = {"run_at": "", "rankings": rankings}
     with open(path, "w") as fh:
         json.dump(payload, fh, indent=2)
+
+
+_CAP_MONOTONIC = 0.0  # replaced in tests
+
+
+async def discover_opencode(client: httpx.AsyncClient, api_url: str) -> list[dict]:
+    """List models exposed by an OpenCode Go endpoint (auth'd subscription)."""
+    resp = await client.get(f"{api_url}/models")
+    resp.raise_for_status()
+    data = resp.json()
+    models = data.get("data") or data.get("models") or []
+    out = []
+    for item in models:
+        mid = item.get("id") or item.get("model")
+        if not mid:
+            continue
+        out.append(
+            {
+                "provider": "opencode",
+                "model_id": mid,
+                "context_window": int(item.get("context_length", item.get("max_context_length", 64_000))),
+                "latency_ms": 0,
+            }
+        )
+    return out
+
+
+async def discover_openrouter(client: httpx.AsyncClient, api_url: str) -> list[dict]:
+    """List OpenRouter free models only."""
+    resp = await client.get(f"{api_url}/models")
+    resp.raise_for_status()
+    data = resp.json() or {}
+    out = []
+    for item in data.get("data", []):
+        mid = item.get("id")
+        if not mid or not is_free_model(mid, item.get("pricing")):
+            continue
+        out.append(
+            {
+                "provider": "openrouter",
+                "model_id": mid,
+                "context_window": int(item.get("context_length", 64_000)),
+                "latency_ms": 0,
+            }
+        )
+    return out
+
+
+async def fetch_elo(client: httpx.AsyncClient) -> dict[str, float]:
+    """Fetch LMSYS chatbot-arena elo by model name (best-effort; {} on failure)."""
+    url = "https://huggingface.co/api/datasets/lmsys/chatbot-arena-leaderboard/parquet"
+    try:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        rows = resp.json()
+    except Exception as exc:
+        logger.warning("ELO fetch failed: %s", exc)
+        return {}
+    elo: dict[str, float] = {}
+    for row in rows:
+        name = row.get("model_name") or row.get("model")
+        val = row.get("elo")
+        if name and isinstance(val, (int, float)):
+            elo[name] = float(val)
+    return elo
+
+
+async def probe_latency(
+    client: httpx.AsyncClient,
+    provider: str,
+    model_id: str,
+    base_url: str,
+    api_key: str,
+    prompt: str,
+    timeout_s: float,
+    runs: int,
+) -> dict:
+    """Send a minimal completion and return ttft/total medians (ms)."""
+    import time as _time
+
+    samples_total: list[float] = []
+    last_ttft = 0.0
+    for _ in range(max(1, runs)):
+        started = _time.monotonic()
+        first_chunk_at: float | None = None
+        try:
+            async with client.stream(
+                "POST",
+                f"{base_url}/chat/completions",
+                json={
+                    "model": model_id,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 16,
+                    "stream": True,
+                },
+                headers={"Authorization": f"Bearer {api_key}"},
+            ) as resp:
+                async for chunk in resp.aiter_bytes():
+                    if first_chunk_at is None:
+                        first_chunk_at = _time.monotonic()
+                    if b"data: [DONE]" in chunk:
+                        break
+            done = _time.monotonic()
+        except Exception as exc:
+            logger.warning("probe %s/%s failed: %s", provider, model_id, exc)
+            return {
+                "provider": provider,
+                "model_id": model_id,
+                "ok": False,
+                "ttft_ms": None,
+                "total_ms": None,
+                "probed_at": _dt.datetime.now().isoformat(),
+            }
+        samples_total.append((done - started) * 1000)
+        last_ttft = ((first_chunk_at or started) - started) * 1000
+
+    def _median(vals: list[float]) -> float:
+        s = sorted(vals)
+        n = len(s)
+        return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+    return {
+        "provider": provider,
+        "model_id": model_id,
+        "ok": True,
+        "ttft_ms": round(_median(samples_total), 1),
+        "total_ms": round(_median([last_ttft]), 1),
+        "probed_at": _dt.datetime.now().isoformat(),
+    }
