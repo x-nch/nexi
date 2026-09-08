@@ -239,3 +239,76 @@ def test_model_spec_provider_defaults_to_empty():
     from nexi.adapters.model_router import ModelSpec
     spec = ModelSpec(id="test-model")
     assert spec.provider == ""
+
+
+# ---------------------------------------------------------------------------
+# Task 2b: get_best_model intent-strength filtering
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _ranked_redis(monkeypatch):
+    """Seed a fakeredis with two ranked models — one strong for QUERY, one for DECISION."""
+    client = fakeredis.FakeRedis()
+    rankings = [
+        {
+            "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
+            "provider": "openrouter",
+            "score": 0.80,
+            "quality": 0.75,
+            "latency_ms": 3500,
+            "context_window": 131072,
+            "elo": 1250.0,
+            "tier": "strong",
+            "strengths": ["QUERY", "ESCALATION"],
+        },
+        {
+            "model_id": "deepseek/deepseek-v4-lite",
+            "provider": "opencode",
+            "score": 0.70,
+            "quality": 0.65,
+            "latency_ms": 800,
+            "context_window": 64000,
+            "elo": 1100.0,
+            "tier": "mid",
+            "strengths": ["DECISION", "EXECUTION"],
+        },
+    ]
+    redis_cfg = RedisConfig(
+        url="redis://localhost:6379/0",
+        ttl_s=86400,
+        rankings_key="model_selector:rankings:test",
+    )
+    write_rankings(client, rankings, "model_selector:rankings:test", ttl_s=60)
+    cfg = ModelSelectorConfig(redis=redis_cfg)
+    monkeypatch.setattr("nexi.adapters.model_selector._redis_client", client)
+    return cfg
+
+
+async def test_get_best_model_prefers_strength_match(_ranked_redis):
+    sel = ModelSelector(config=_ranked_redis)
+    best = await sel.get_best_model("QUERY", budget="balanced")
+    assert best is not None
+    assert best.id == "nvidia/nemotron-3-super-120b-a12b:free"
+
+
+async def test_get_best_model_prefers_strength_over_score(_ranked_redis):
+    """DECISION strength matches deepseek (lower score) — must beat nemotron (higher score)."""
+    sel = ModelSelector(config=_ranked_redis)
+    best = await sel.get_best_model("DECISION", budget="balanced")
+    assert best is not None
+    assert best.id == "deepseek/deepseek-v4-lite"
+
+
+async def test_get_best_model_returns_none_when_no_rankings(monkeypatch):
+    client = fakeredis.FakeRedis()
+    monkeypatch.setattr("nexi.adapters.model_selector._redis_client", client)
+    redis_cfg = RedisConfig(
+        url="redis://localhost:6379/0",
+        ttl_s=86400,
+        rankings_key="model_selector:rankings:empty",
+    )
+    cfg = ModelSelectorConfig(redis=redis_cfg)
+    sel = ModelSelector(config=cfg)
+    best = await sel.get_best_model("QUERY")
+    assert best is None

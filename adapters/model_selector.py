@@ -400,12 +400,29 @@ class ModelSelector:
         budget: str = "balanced",
         exclude: list[str] | None = None,
     ) -> ModelSpec | None:
-        ranked = await self.get_ranked_models(intent, limit=50)
+        """Return the highest-scoring free model for *intent*, or ``None``."""
+        ranked = read_rankings(
+            self._redis,
+            self._config.redis.rankings_key,
+            self._config.redis.ttl_s,
+        )
+        if not ranked:
+            return None
         excluded = set(exclude or [])
-        for model_spec in ranked:
-            if model_spec.id in excluded:
+        # Phase 1: prefer models whose strengths include the intent.
+        for entry in ranked:
+            mid = entry.get("model_id", "")
+            if mid in excluded:
                 continue
-            return model_spec
+            strengths = entry.get("strengths") or []
+            if intent in strengths:
+                return _ranking_to_model_spec(entry)
+        # Phase 2: fall back to top model regardless of strengths.
+        for entry in ranked:
+            mid = entry.get("model_id", "")
+            if mid in excluded:
+                continue
+            return _ranking_to_model_spec(entry)
         return None
 
     async def get_ranked_models(self, intent: str, limit: int = 5) -> list[ModelSpec]:
