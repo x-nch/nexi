@@ -211,3 +211,31 @@ async def test_is_available_false_when_stale(_cfg, monkeypatch):
     stale_redis_config = _cfg.redis.model_copy(update={"ttl_s": 0})
     sel2 = ModelSelector(config=_cfg.model_copy(update={"redis": stale_redis_config}))
     assert await sel2.is_available() is False
+
+
+# ---------------------------------------------------------------------------
+# Task 1: provider field on ModelSpec + _ranking_to_model_spec
+# ---------------------------------------------------------------------------
+
+from nexi.adapters.model_selector import _ranking_to_model_spec
+
+
+def test_ranking_to_model_spec_preserves_provider():
+    entry = {
+        "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
+        "provider": "openrouter",
+        "context_window": 131072,
+        "latency_ms": 3500,
+        "score": 0.72,
+        "elo": 1250.0,
+        "tier": "strong",
+    }
+    spec = _ranking_to_model_spec(entry)
+    assert spec.provider == "openrouter"
+    assert spec.id == "nvidia/nemotron-3-super-120b-a12b:free"
+
+
+def test_model_spec_provider_defaults_to_empty():
+    from nexi.adapters.model_router import ModelSpec
+    spec = ModelSpec(id="test-model")
+    assert spec.provider == ""

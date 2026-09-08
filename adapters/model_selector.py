@@ -375,6 +375,7 @@ _FREE_TIER = 1  # free models always rank cheapest for cost budgeting
 def _ranking_to_model_spec(entry: dict) -> ModelSpec:
     return ModelSpec(
         id=entry["model_id"],
+        provider=entry.get("provider", ""),
         cost_tier=_FREE_TIER,
         context_window=int(entry.get("context_window", 64_000)),
         strengths=INTENT_STRENGTHS.get("QUERY", {"QUERY", "ESCALATION"}).copy(),

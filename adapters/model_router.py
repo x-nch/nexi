@@ -43,6 +43,7 @@ class ModelSpec:
     strengths: set[str] = field(default_factory=set)  # intent classes served well
     latency_ms: int = 0
     description: str = ""
+    provider: str = ""
 
 
 @dataclass(frozen=True)
