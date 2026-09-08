@@ -122,6 +122,7 @@ async def chat_completion_with_fallback(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | None = None,
     json_mode: bool = False,
+    method: str | None = None,  # "auto" → dynamic selection via Redis rankings
 ) -> tuple[dict[str, Any], ModelResolution]:
     """Chat completion with cross-provider failover to OpenRouter free models.
 
@@ -130,8 +131,27 @@ async def chat_completion_with_fallback(
     ``settings.openrouter_free_model`` — guarded to free-tier ids only — when an
     OpenRouter API key is configured. The returned ``ModelResolution`` reflects
     which backend actually served the call.
+
+    When *method* is ``"auto"`` (or defaults to ``settings.model_method``),
+    consult Redis-backed rankings before the static resolution path: the
+    top-ranked free model for the intent seeds the primary attempt. A selector
+    failure (Redis down, no rankings) degrades to static resolution; it never
+    triggers the OpenRouter failover on its own.
     """
     from .model_router import ModelResolution  # local to avoid circular import at module load
+
+    effective_method = method or settings.model_method
+    if effective_method == "auto" and not (provider or model_id):
+        try:
+            from .model_selector import ModelSelector
+
+            selector = ModelSelector()
+            best = await selector.get_best_model(intent_class, budget=budget or "balanced")
+            if best and best.provider:
+                provider = best.provider
+                model_id = best.id
+        except Exception as exc:
+            logger.warning("Auto-selector failed: %s; falling back to static resolution", exc)
 
     try:
         return await chat_completion(

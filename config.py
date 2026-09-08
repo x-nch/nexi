@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     nexi_default_resolves_to: str = "openrouter"
     # Dynamic model selection budget. One of: cheap | balanced | quality.
     model_budget: str = "balanced"
+    # Model selection method. One of: "static" (env-based resolve) | "auto" (Redis rankings).
+    model_method: str = "static"
     options_count: int = 5
 
     # OpenCode Go API (hosted DeepSeek V4)
@@ -71,6 +73,7 @@ class Settings(BaseSettings):
         self.litellm_api_key = os.environ.get("NEXI_LITELLM_API_KEY", self.litellm_api_key)
         self.nexi_default_resolves_to = os.environ.get("NEXI_NEXI_DEFAULT_RESOLVES_TO", self.nexi_default_resolves_to)
         self.xnch_base_url = os.environ.get("NEXI_XNCH_BASE_URL", self.xnch_base_url)
+        self.model_method = os.environ.get("NEXI_MODEL_METHOD", self.model_method)
         val = os.environ.get("NEXI_WORKFLOW_EXECUTOR_ENABLED")
         if val is not None:
             self.workflow_executor_enabled = val.lower() == "true"
