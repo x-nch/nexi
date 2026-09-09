@@ -239,8 +239,8 @@ async def discover_opencode(client: httpx.AsyncClient, api_url: str) -> list[dic
 
 async def discover_openrouter(client: httpx.AsyncClient, api_url: str) -> list[dict]:
     """List OpenRouter free models only.
-
-    Returns ``[]`` when the upstream is unreachable or errors.
+    
+    Returns [] when the upstream is unreachable or errors.
     """
     try:
         resp = await client.get(f"{api_url}/models")
@@ -262,6 +262,10 @@ async def discover_openrouter(client: httpx.AsyncClient, api_url: str) -> list[d
         mid = item.get("id")
         if not mid or not is_free_model(mid, item.get("pricing")):
             continue
+        arch = item.get("architecture") or {}
+        input_modals = arch.get("input_modalities") or []
+        if "text" not in input_modals:
+            continue
         out.append(
             {
                 "provider": "openrouter",
@@ -271,8 +275,6 @@ async def discover_openrouter(client: httpx.AsyncClient, api_url: str) -> list[d
             }
         )
     return out
-
-
 async def fetch_elo(client: httpx.AsyncClient) -> dict[str, float]:
     """Fetch LMSYS chatbot-arena elo by model name (best-effort; {} on failure)."""
     url = "https://huggingface.co/api/datasets/lmsys/chatbot-arena-leaderboard/parquet"
@@ -373,12 +375,21 @@ _FREE_TIER = 1  # free models always rank cheapest for cost budgeting
 
 
 def _ranking_to_model_spec(entry: dict) -> ModelSpec:
+    # Compute strengths from tier: strong models handle any intent, mid/weak
+    # are progressively narrower so phase-1 of get_best_model matches sensibly.
+    tier = entry.get("tier")
+    if tier in ("frontier", "strong"):
+        strengths: set[str] = {"DECISION", "EXECUTION", "QUERY", "ESCALATION"}
+    elif tier == "mid":
+        strengths = {"QUERY", "ESCALATION"}
+    else:  # weak or None
+        strengths = {"QUERY"}
     return ModelSpec(
         id=entry["model_id"],
         provider=entry.get("provider", ""),
         cost_tier=_FREE_TIER,
         context_window=int(entry.get("context_window", 64_000)),
-        strengths=INTENT_STRENGTHS.get("QUERY", {"QUERY", "ESCALATION"}).copy(),
+        strengths=strengths,
         latency_ms=int(entry.get("latency_ms", 0)),
         description=(
             f"free {entry.get('provider', '?')} model, elo={entry.get('elo')}, "

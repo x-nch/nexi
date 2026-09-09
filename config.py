@@ -77,6 +77,7 @@ class Settings(BaseSettings):
         val = os.environ.get("NEXI_WORKFLOW_EXECUTOR_ENABLED")
         if val is not None:
             self.workflow_executor_enabled = val.lower() == "true"
+        self.xnch_service_key = os.environ.get("NEXI_XNCH_SERVICE_KEY", self.xnch_service_key)
 
     # Legacy: local vLLM (kept for rollback + persona probing)
     vllm_primary_url: str = ""
@@ -86,7 +87,7 @@ class Settings(BaseSettings):
 
     # OpenRouter free-model fallback (used only when the primary provider errors,
     # and only with `:free`-suffixed models when no paid key is configured).
-    openrouter_free_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
+    openrouter_free_model: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
     openrouter_free_models: list = Field(default_factory=list)
 
     # --- Free model selector (CLI writes rankings; runtime module reads) ---
